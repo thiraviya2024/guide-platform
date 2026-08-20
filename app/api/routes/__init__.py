@@ -7,7 +7,6 @@ from . import upload
 from . import analyze
 from . import report
 from . import admin
-from . import blood_test
 from . import cbc
 from . import lft
 from . import kft
@@ -35,7 +34,6 @@ __all__ = [
     'analyze',
     'report',
     'admin',
-    'blood_test',
     'cbc',
     'lft',
     'kft',
