@@ -5,7 +5,7 @@ import logging
 
 from app.core.config import settings
 from app.api.routes import (
-    upload, analyze, report, admin, blood_test, 
+    upload, analyze, report, admin,
     cbc, lft, kft, thyroid, diabetes, vitamins, electrolytes,
     analytics, auth, disease, doctor, guideline, health, mimic, patient
 )
@@ -54,7 +54,6 @@ app.include_router(upload.router, prefix=API_V1_PREFIX, tags=["Upload"])
 app.include_router(analyze.router, prefix=API_V1_PREFIX, tags=["Analysis"])
 app.include_router(report.router, prefix=API_V1_PREFIX, tags=["Report"])
 app.include_router(admin.router, prefix=API_V1_PREFIX, tags=["Admin"])
-app.include_router(blood_test.router, prefix=API_V1_PREFIX, tags=["Blood Test"])
 
 # 8 Clinical Modules
 app.include_router(cbc.router, prefix=API_V1_PREFIX, tags=["CBC"])
@@ -100,7 +99,6 @@ async def root():
     endpoints = {
         "upload": ["/api/v1/upload/report"],
         "analysis": ["/api/v1/analyze/manual", "/api/v1/analyze/file"],
-        "blood_test": ["/api/v1/blood-test/analyze", "/api/v1/blood-test/history"],
         "cbc": ["/api/v1/cbc/analyze", "/api/v1/cbc/analyze-values", "/api/v1/cbc/reference-ranges"],
         "lft": ["/api/v1/lft/analyze", "/api/v1/lft/analyze-values", "/api/v1/lft/reference-ranges"],
         "kft": ["/api/v1/kft/analyze", "/api/v1/kft/analyze-values", "/api/v1/kft/reference-ranges"],
@@ -159,7 +157,6 @@ async def api_status():
         "diabetes": "✅ active",
         "vitamins": "✅ active",
         "electrolytes": "✅ active",
-        "blood_test": "✅ active",
         "ocr": "✅ active",
         "reporting": "✅ active",
         "analytics": "✅ active",
@@ -179,8 +176,8 @@ async def api_status():
         "status": "healthy",
         "version": settings.APP_VERSION,
         "modules": modules,
-        "total_modules": 20 if AI_ROUTER_AVAILABLE else 19,
-        "endpoints_count": 69 if AI_ROUTER_AVAILABLE else 65,
+        "total_modules": 19 if AI_ROUTER_AVAILABLE else 18,
+        "endpoints_count": 66 if AI_ROUTER_AVAILABLE else 62,
         "docs": "/docs",
         "message": "🎉 All modules are complete! System ready for production!"
     }
