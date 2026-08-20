@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: lipidai-backend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    envVars:
+      - key: DATABASE_URL
+        value: postgresql://neondb_owner:npg_Br9oSefKvHn2@ep-restless-pine-azbzbjcn-pooler.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: DEBUG
+        value: False

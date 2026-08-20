@@ -1,0 +1,6 @@
+﻿Total Cholesterol: 245
+LDL: 165
+HDL: 38
+Triglycerides: 210
+VLDL: 42
+Non-HDL: 207
