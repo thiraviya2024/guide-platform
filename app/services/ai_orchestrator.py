@@ -5,6 +5,7 @@ AI Orchestrator - Coordinates multiple AI models
 
 from typing import Dict, Any, List
 import uuid
+import json
 import logging
 from datetime import datetime
 
@@ -34,8 +35,10 @@ class AIOrchestrator:
             if settings.GEMINI_API_KEY:
                 self.providers['gemini'] = GeminiProvider()
                 logger.info("✅ Gemini provider initialized")
-        except ImportError:
-            logger.warning("Gemini provider not available")
+            else:
+                logger.warning("GEMINI_API_KEY not set. Gemini disabled.")
+        except ImportError as e:
+            logger.warning(f"Gemini provider not available: {e}")
     
     def analyze(self, clinical_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -108,10 +111,14 @@ class AIOrchestrator:
         if 'overall_status' in data:
             context += f"\nOVERALL STATUS: {data.get('overall_status')}\n"
         
+        # Add prompt if present
+        if 'prompt' in data and data['prompt']:
+            context += f"\nUSER QUESTION: {data.get('prompt')}\n"
+        
         return context
     
     def _log_analysis(self, responses: Dict, consensus: Dict):
-        """Log analysis results for audit."""
+        """Log analysis results for audit with JSON serialization."""
         try:
             from app.core.database import SessionLocal
             from sqlalchemy import text
@@ -121,6 +128,10 @@ class AIOrchestrator:
                 
                 # Log each provider response
                 for provider, response in responses.items():
+                    # Convert dict to JSON string
+                    input_json = json.dumps(consensus.get('input_data', {}), default=str)
+                    output_json = json.dumps(response, default=str)
+                    
                     db.execute(text("""
                         INSERT INTO ai_analysis_logs 
                         (analysis_id, model_provider, model_name, input_data, output_data, confidence, response_time_ms, created_at)
@@ -129,26 +140,32 @@ class AIOrchestrator:
                         'analysis_id': analysis_id,
                         'provider': provider,
                         'model': response.get('model', 'unknown'),
-                        'input': consensus.get('input_data', {}),
-                        'output': response,
+                        'input': input_json,
+                        'output': output_json,
                         'confidence': response.get('confidence', 0),
                         'response_time': response.get('response_time_ms', 0)
                     })
                 
                 # Log consensus result
+                models_used_json = json.dumps(list(responses.keys()))
+                disagreements_json = json.dumps(consensus.get('disagreements', {}), default=str)
+                result_json = json.dumps(consensus.get('final_response', {}), default=str)
+                
                 db.execute(text("""
                     INSERT INTO ai_consensus_results 
                     (analysis_id, models_used, agreement_score, disagreements, final_result, physician_review_required, created_at)
                     VALUES (:analysis_id, :models, :agreement, :disagreements, :result, :review_required, NOW())
                 """), {
                     'analysis_id': analysis_id,
-                    'models': list(responses.keys()),
+                    'models': models_used_json,
                     'agreement': consensus.get('agreement_score', 0),
-                    'disagreements': consensus.get('disagreements', {}),
-                    'result': consensus.get('final_response', {}),
+                    'disagreements': disagreements_json,
+                    'result': result_json,
                     'review_required': consensus.get('physician_review_required', False)
                 })
                 
                 db.commit()
+                logger.info(f"✅ AI analysis logged: {analysis_id}")
+                
         except Exception as e:
             logger.error(f"Failed to log AI analysis: {e}")
