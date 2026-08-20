@@ -17,7 +17,8 @@ class GeminiProvider:
     def __init__(self):
         self.api_key = settings.GEMINI_API_KEY
         # ✅ Updated to use the working model
-        self.model_name = settings.GEMINI_MODEL or "models/gemini-2.5-flash"
+        self.model_name = settings.GEMINI_MODEL or "models/gemini-3.6-flash"
+
         
         if not self.api_key:
             logger.warning("GEMINI_API_KEY not set. Gemini features disabled.")
