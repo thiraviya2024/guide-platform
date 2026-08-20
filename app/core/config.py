@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     
     # ✅ Gemini Configuration - ADDED
     GEMINI_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "models/gemini-2.5-flash"
+    GEMINI_MODEL: str = "models/gemini-3.6-flash"
     
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4o"
