@@ -12,6 +12,7 @@ from datetime import datetime
 from app.services.groq_provider import GroqProvider
 from app.services.consensus_engine import ConsensusEngine
 from app.core.config import settings
+from app.services.response_sanitizer import sanitize_model_output
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,10 @@ class AIOrchestrator:
             try:
                 start_time = datetime.now()
                 responses[name] = provider.analyze(context)
+                if responses[name].get('success'):
+                    responses[name]['response'] = sanitize_model_output(
+                        responses[name].get('response', '')
+                    )
                 end_time = datetime.now()
                 if responses[name].get('success'):
                     responses[name]['response_time_ms'] = (end_time - start_time).total_seconds() * 1000
@@ -74,6 +79,12 @@ class AIOrchestrator:
         
         # 3. Run consensus engine
         consensus = self.consensus_engine.evaluate(responses, clinical_data, analysis_id)
+        if consensus.get('success'):
+            final_response = consensus.get('final_response') or {}
+            if isinstance(final_response, dict):
+                final_response['text'] = sanitize_model_output(
+                    final_response.get('text', '')
+                )
         
         # 4. Log results
         self._log_analysis(responses, consensus)

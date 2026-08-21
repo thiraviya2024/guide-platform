@@ -6,6 +6,10 @@ Consensus Engine - Evaluates agreement between AI models
 from typing import Dict, Any, List
 import json
 import logging
+import re
+from difflib import SequenceMatcher
+
+from app.services.response_sanitizer import sanitize_model_output
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +49,8 @@ class ConsensusEngine:
         # Extract key findings from each response
         findings = {}
         for name, resp in successful.items():
-            findings[name] = self._extract_findings(resp.get('response', ''))
+            resp['response'] = sanitize_model_output(resp.get('response', ''))
+            findings[name] = self._extract_findings(resp['response'])
         
         # Calculate agreement
         agreement = self._calculate_agreement(findings)
@@ -54,7 +59,7 @@ class ConsensusEngine:
         disagreements = self._find_disagreements(findings)
         
         # Build final response
-        final_response = self._synthesize(findings, clinical_data)
+        final_response = self._synthesize(findings, clinical_data, successful)
         
         # Determine if physician review is needed
         physician_review_required = (
@@ -133,7 +138,8 @@ class ConsensusEngine:
         model_names = list(findings.keys())
         agreements = {}
         
-        # Compare abnormal results
+        # Compare abnormal results using normalized wording rather than exact
+        # model-generated bullet strings.
         abnormal_sets = {}
         for name, f in findings.items():
             abnormal_sets[name] = set(f.get('abnormal_results', []))
@@ -144,39 +150,41 @@ class ConsensusEngine:
                 common = common.intersection(abnormal_sets[name])
             agreements['abnormal_results'] = list(common)
         
-        # Calculate overall agreement score
-        total_items = 0
-        matched_items = 0
-        
-        # Compare recommendations
+        comparable_scores = []
+        categories = ('summary', 'abnormal_results', 'possible_causes',
+                      'recommendations', 'lifestyle_suggestions')
         for i, name1 in enumerate(model_names):
-            recs1 = set(findings[name1].get('recommendations', []))
-            for name2 in model_names[i+1:]:
-                recs2 = set(findings[name2].get('recommendations', []))
-                if recs1 and recs2:
-                    total_items += 1
-                    intersection = recs1.intersection(recs2)
-                    if len(intersection) / max(len(recs1), len(recs2)) > 0.5:
-                        matched_items += 1
-        
-        # Compare lifestyle suggestions
-        for i, name1 in enumerate(model_names):
-            life1 = set(findings[name1].get('lifestyle_suggestions', []))
-            for name2 in model_names[i+1:]:
-                life2 = set(findings[name2].get('lifestyle_suggestions', []))
-                if life1 and life2:
-                    total_items += 1
-                    intersection = life1.intersection(life2)
-                    if len(intersection) / max(len(life1), len(life2)) > 0.5:
-                        matched_items += 1
-        
-        overall_score = matched_items / total_items if total_items > 0 else 1.0
+            for name2 in model_names[i + 1:]:
+                for category in categories:
+                    left = findings[name1].get(category, [])
+                    right = findings[name2].get(category, [])
+                    left_text = ' '.join(left) if isinstance(left, list) else left
+                    right_text = ' '.join(right) if isinstance(right, list) else right
+                    if left_text and right_text:
+                        comparable_scores.append(self._text_similarity(left_text, right_text))
+
+        overall_score = (
+            sum(comparable_scores) / len(comparable_scores)
+            if comparable_scores else 1.0
+        )
         
         return {
             'overall_score': overall_score,
             'agreements': agreements,
-            'agreement_details': f"{matched_items}/{total_items} items matched"
+            'agreement_details': f"Compared {len(comparable_scores)} normalized response sections"
         }
+
+    @staticmethod
+    def _text_similarity(left: str, right: str) -> float:
+        """Score equivalent clinical wording without requiring exact phrases."""
+        normalize = lambda text: set(re.findall(r"[a-z0-9]+", text.lower()))
+        left_words = normalize(left)
+        right_words = normalize(right)
+        if not left_words or not right_words:
+            return 0.0
+        overlap = len(left_words & right_words) / len(left_words | right_words)
+        sequence = SequenceMatcher(None, ' '.join(sorted(left_words)), ' '.join(sorted(right_words))).ratio()
+        return max(overlap, sequence)
     
     def _find_disagreements(self, findings: Dict[str, Dict]) -> List[Dict[str, Any]]:
         """Find disagreements between models."""
@@ -193,9 +201,10 @@ class ConsensusEngine:
             for name2 in model_names[i+1:]:
                 recs2 = set(findings[name2].get('recommendations', []))
                 if recs1 and recs2:
-                    only_in_1 = recs1 - recs2
-                    only_in_2 = recs2 - recs1
-                    if only_in_1 or only_in_2:
+                    similarity = self._text_similarity(' '.join(recs1), ' '.join(recs2))
+                    if similarity < 0.2:
+                        only_in_1 = recs1 - recs2
+                        only_in_2 = recs2 - recs1
                         disagreements.append({
                             'type': 'recommendation',
                             'model_1': name1,
@@ -207,17 +216,14 @@ class ConsensusEngine:
         
         return disagreements
     
-    def _synthesize(self, findings: Dict[str, Dict], clinical_data: Dict) -> Dict[str, Any]:
+    def _synthesize(
+        self,
+        findings: Dict[str, Dict],
+        clinical_data: Dict,
+        responses: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
         """Synthesize final response from multiple models."""
+        # The provider's text is the patient-facing answer. Parsed sections are
+        # useful for agreement scoring, but must not replace or augment it.
         first_model = list(findings.keys())[0]
-        base = findings[first_model]
-        
-        return {
-            'summary': base.get('summary', ''),
-            'abnormal_results': base.get('abnormal_results', []),
-            'possible_causes': base.get('possible_causes', []),
-            'recommendations': base.get('recommendations', []),
-            'lifestyle_suggestions': base.get('lifestyle_suggestions', []),
-            'clinical_data': clinical_data,
-            'model_consensus': 'Based on analysis from multiple AI models'
-        }
+        return {'text': responses[first_model].get('response', '')}

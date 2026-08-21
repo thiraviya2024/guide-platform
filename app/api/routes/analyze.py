@@ -10,6 +10,7 @@ import os
 import shutil
 from datetime import datetime
 import io
+import json
 import re
 import logging
 
@@ -23,6 +24,7 @@ from app.services.vitamins_service import VitaminsService
 from app.services.electrolytes_service import ElectrolytesService
 from app.engines.extraction_engine.cbc_extractor import CBCExtractor
 from app.engines.extraction_engine.lipid_extractor import LipidExtractor
+from app.services.report_context import save_report_context
 
 logger = logging.getLogger(__name__)
 
@@ -238,6 +240,17 @@ def parse_lab_values(text: str, module: str) -> Dict[str, float]:
     return values
 
 
+def _parse_patient_info(value: Optional[str]) -> Dict[str, Any]:
+    """Decode optional patient metadata without changing the file API."""
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
 # ============================================================
 # API ENDPOINTS
 # ============================================================
@@ -277,6 +290,13 @@ async def analyze_manual(
             values = values_data
         
         result = service.analyze_values(values)
+        result['report_context_id'] = save_report_context({
+            'patient_info': request.patient_info or {},
+            'results': result.get('results', {}),
+            'disease_risks': result.get('disease_risks', []),
+            'overall_status': result.get('overall_status'),
+            'category': module,
+        })
         return result
 
     except Exception as e:
@@ -348,6 +368,14 @@ async def analyze_file(
                 'size': os.path.getsize(file_path),
                 'module': module
             }
+            result['report_context_id'] = save_report_context({
+                'patient_info': _parse_patient_info(patient_info),
+                'results': result.get('results', {}),
+                'disease_risks': result.get('disease_risks', []),
+                'overall_status': result.get('overall_status'),
+                'category': module,
+                'file_info': result['file_info'],
+            })
             return result
         else:
             return {

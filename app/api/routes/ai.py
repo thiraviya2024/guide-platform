@@ -10,10 +10,61 @@ import logging
 
 from app.services.ai_orchestrator import AIOrchestrator
 from app.core.config import settings
+from app.services.response_sanitizer import sanitize_model_output
+from app.services.report_context import load_report_context
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 ai_orchestrator = AIOrchestrator()
+
+_FACTUAL_FIELDS = {
+    "test_name", "name", "parameter", "value", "unit", "reference_range",
+    "ref_range", "status", "flag", "calculated_value", "calculated_values",
+    "risk", "risks", "finding", "findings", "disease", "confidence",
+    "severity", "recommendation", "reason", "food", "category"
+}
+
+
+def _factual_evidence(value: Any) -> Any:
+    """Keep only factual clinical fields before evidence reaches an LLM."""
+    if isinstance(value, dict):
+        return {
+            key: _factual_evidence(item)
+            for key, item in value.items()
+            if key in _FACTUAL_FIELDS or isinstance(item, (dict, list))
+        }
+    if isinstance(value, list):
+        return [_factual_evidence(item) for item in value]
+    return value
+
+
+def _clinical_evidence(data: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "patient_info": _factual_evidence({
+            key: data.get("patient_info", {}).get(key)
+            for key in ("age", "gender")
+            if key in data.get("patient_info", {})
+        }),
+        "results": _factual_evidence(data.get("results", {})),
+        "disease_risks": _factual_evidence(data.get("disease_risks", [])),
+        "prompt": data.get("prompt", "")
+    }
+
+
+def _chat_evidence(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Use persisted rule findings when chat sends a report context ID."""
+    context_id = data.get("report_context_id")
+    persisted = load_report_context(context_id) if context_id else None
+    source = persisted or data
+    return {
+        "patient_info": _factual_evidence(source.get("patient_info", {})),
+        "results": _factual_evidence(source.get("results", {})),
+        "disease_risks": _factual_evidence(source.get("disease_risks", [])),
+        "overall_status": source.get("overall_status"),
+        "category": source.get("category"),
+        "prompt": data.get("prompt", ""),
+        "report_context_id": context_id,
+    }
 
 
 @router.get("/ai/status")
@@ -63,20 +114,7 @@ async def analyze_with_ai(data: Dict[str, Any]):
     """
     try:
         # Extract data
-        prompt = data.get("prompt", "")
-        context = data.get("context", "")
-        patient_info = data.get("patient_info", {})
-        results = data.get("results", {})
-        disease_risks = data.get("disease_risks", [])
-        
-        # Prepare clinical data for AI
-        clinical_data = {
-            "patient_info": patient_info,
-            "results": results,
-            "disease_risks": disease_risks,
-            "prompt": prompt,
-            "context": context
-        }
+        clinical_data = _chat_evidence(data)
         
         # Call AI Orchestrator
         response = ai_orchestrator.analyze(clinical_data)
@@ -84,10 +122,11 @@ async def analyze_with_ai(data: Dict[str, Any]):
         if response.get("success"):
             return {
                 "success": True,
-                "response": response.get("final_response", {}),
+                "response": sanitize_model_output(response.get("final_response", {}).get("text", "")),
                 "provider": response.get("models_used", []),
                 "agreement_score": response.get("agreement_score", 0),
-                "physician_review_required": response.get("physician_review_required", False)
+                "physician_review_required": response.get("physician_review_required", False),
+                "report_context_id": clinical_data.get("report_context_id")
             }
         else:
             # Fallback: If AI Orchestrator fails, try direct Groq call
@@ -96,19 +135,13 @@ async def analyze_with_ai(data: Dict[str, Any]):
                 groq = GroqProvider()
                 
                 # Build context
-                full_context = f"Patient: {patient_info}\n"
-                if results:
-                    full_context += f"\nLab Results: {results}\n"
-                if disease_risks:
-                    full_context += f"\nDisease Risks: {disease_risks}\n"
-                if prompt:
-                    full_context += f"\nQuestion: {prompt}\n"
+                full_context = str(clinical_data)
                 
                 groq_response = groq.analyze(full_context)
                 if groq_response.get("success"):
                     return {
                         "success": True,
-                        "response": groq_response.get("response", ""),
+                        "response": sanitize_model_output(groq_response.get("response", "")),
                         "provider": ["groq"],
                         "agreement_score": 1.0,
                         "physician_review_required": False
