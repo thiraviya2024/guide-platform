@@ -4,10 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 
 from app.core.config import settings
+from app.core.database import SessionLocal
+from app.services.rule_version_service import ensure_schema
 from app.api.routes import (
     upload, analyze, report, admin,
-    cbc, lft, kft, thyroid, diabetes, vitamins, electrolytes,
-    analytics, auth, disease, doctor, guideline, health, mimic, patient
+    cbc, lft, kft, thyroid, diabetes, vitamins, electrolytes, lipid,
+    analytics, auth, disease, doctor, guideline, health, mimic, patient, clinical
 )
 
 # Import AI router directly
@@ -63,6 +65,7 @@ app.include_router(thyroid.router, prefix=API_V1_PREFIX, tags=["Thyroid"])
 app.include_router(diabetes.router, prefix=API_V1_PREFIX, tags=["Diabetes"])
 app.include_router(vitamins.router, prefix=API_V1_PREFIX, tags=["Vitamins"])
 app.include_router(electrolytes.router, prefix=API_V1_PREFIX, tags=["Electrolytes"])
+app.include_router(lipid.router, prefix=API_V1_PREFIX, tags=["Lipid"])
 
 # Advanced Features
 app.include_router(analytics.router, prefix=API_V1_PREFIX, tags=["Analytics"])
@@ -73,6 +76,7 @@ app.include_router(guideline.router, prefix=API_V1_PREFIX, tags=["Guideline"])
 app.include_router(health.router, prefix=API_V1_PREFIX, tags=["Health"])
 app.include_router(mimic.router, prefix=API_V1_PREFIX, tags=["MIMIC"])
 app.include_router(patient.router, prefix=API_V1_PREFIX, tags=["Patient"])
+app.include_router(clinical.router, prefix=API_V1_PREFIX)
 
 # AI Orchestrator - Direct import
 if AI_ROUTER_AVAILABLE and ai_router is not None:
@@ -84,6 +88,15 @@ else:
 
 @app.on_event("startup")
 async def startup_event():
+    # Additive initialization only; legacy clinical modules remain available
+    # even if the optional versioned-rule storage cannot be reached.
+    try:
+        with SessionLocal() as db:
+            ensure_schema(db)
+            db.commit()
+        logger.info("Versioned clinical-rule schema is ready")
+    except Exception as exc:
+        logger.warning("Versioned clinical-rule schema is unavailable: %s", exc)
     logger.info(f"🚀 Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     logger.info("✅ LifeSaver Medical AI Platform is READY! 🎉")
     logger.info("📊 8 Clinical Modules: Lipid, CBC, LFT, KFT, Thyroid, Diabetes, Vitamins, Electrolytes")
@@ -106,6 +119,7 @@ async def root():
         "diabetes": ["/api/v1/diabetes/analyze", "/api/v1/diabetes/analyze-values", "/api/v1/diabetes/reference-ranges"],
         "vitamins": ["/api/v1/vitamins/analyze", "/api/v1/vitamins/analyze-values", "/api/v1/vitamins/reference-ranges"],
         "electrolytes": ["/api/v1/electrolytes/analyze", "/api/v1/electrolytes/analyze-values", "/api/v1/electrolytes/reference-ranges"],
+        "lipid": ["/api/v1/lipid/analyze-values"],
         "report": ["/api/v1/report/generate"],
         "admin": ["/api/v1/admin/rules", "/api/v1/admin/stats", "/api/v1/admin/seed"],
         "analytics": ["/api/v1/analytics/", "/api/v1/analytics/summary"],
@@ -144,6 +158,11 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+@app.get("/status")
+async def status_check():
+    return {"status": "running", "version": settings.APP_VERSION}
 
 
 @app.get("/api/v1/status")

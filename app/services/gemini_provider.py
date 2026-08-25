@@ -9,6 +9,7 @@ import logging
 import re
 from app.core.config import settings
 from app.services.response_sanitizer import sanitize_model_output
+from app.services.llm_provider import BaseLLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ _SYSTEM_INSTRUCTION = (
 )
 
 
-class GeminiProvider:
+class GeminiProvider(BaseLLMProvider):
     """Google Gemini AI provider."""
     
     def __init__(self):
@@ -64,7 +65,7 @@ class GeminiProvider:
         
         try:
             prompt = self._build_prompt(context)
-            response = self.client.generate_content(prompt)
+            response = self.client.generate_content(prompt, request_options={"timeout": 20})
             
             return {
                 'success': True,
@@ -105,3 +106,11 @@ class GeminiProvider:
         definite diagnosis. Include a brief medical disclaimer when giving health
         guidance.
         """
+
+    def health_check(self) -> Dict[str, Any]:
+        configured = bool(self.api_key)
+        if not configured:
+            return {'configured': False, 'reachable': False, 'status': 'unconfigured', 'model': self.model_name}
+        if self.client is None:
+            return {'configured': True, 'reachable': False, 'status': 'unhealthy', 'model': self.model_name}
+        return {'configured': True, 'reachable': None, 'status': 'configured', 'model': self.model_name}

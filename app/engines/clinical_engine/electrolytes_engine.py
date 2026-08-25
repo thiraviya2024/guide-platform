@@ -4,6 +4,7 @@
 from typing import Dict, List, Any
 from sqlalchemy import text
 from app.core.database import SessionLocal
+from app.services.rule_version_service import lookup_active_rule
 import logging
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ class ElectrolytesEngine:
                     LIMIT 1
                 """)
                 
-                row = db.execute(query, {"param": param, "value": value}).fetchone()
+                row = lookup_active_rule(db, "electrolytes", param, value) or db.execute(query, {"param": param, "value": value}).fetchone()
                 
                 if row:
                     results[param] = {

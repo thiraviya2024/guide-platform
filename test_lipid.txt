@@ -1,6 +1,8 @@
-﻿Total Cholesterol: 245
-LDL: 165
-HDL: 38
-Triglycerides: 210
-VLDL: 42
-Non-HDL: 207
+Lipid Profile Report
+
+Total Cholesterol: 245 mg/dL
+LDL Cholesterol: 165 mg/dL
+HDL Cholesterol: 38 mg/dL
+Triglycerides: 210 mg/dL
+
+Interpretation: Elevated total cholesterol, LDL and triglycerides with low HDL.

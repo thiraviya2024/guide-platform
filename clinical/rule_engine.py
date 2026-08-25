@@ -21,6 +21,7 @@ from typing import Dict, Any
 from sqlalchemy import text
 
 from database.connection import SessionLocal
+from app.services.rule_version_service import lookup_active_rule
 from utils.logger import logger
 
 
@@ -69,7 +70,7 @@ class PostgresRuleEngine:
                     continue
 
                 try:
-                    row = db.execute(query, {"param": param, "value": numeric_value}).fetchone()
+                    row = lookup_active_rule(db, "lipid", param, numeric_value) or db.execute(query, {"param": param, "value": numeric_value}).fetchone()
                 except Exception as exc:  # noqa: BLE001
                     logger.error(f"RuleEngine: query failed for '{param}'={numeric_value}: {exc}")
                     db.rollback()

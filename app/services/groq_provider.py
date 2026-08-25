@@ -9,6 +9,7 @@ import logging
 import re
 from app.core.config import settings
 from app.services.response_sanitizer import sanitize_model_output
+from app.services.llm_provider import BaseLLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ _SYSTEM_INSTRUCTION = (
 )
 
 
-class GroqProvider:
+class GroqProvider(BaseLLMProvider):
     """Groq AI provider."""
     
     def __init__(self):
@@ -44,7 +45,7 @@ class GroqProvider:
             self.client = None
         else:
             try:
-                self.client = Groq(api_key=self.api_key)
+                self.client = Groq(api_key=self.api_key, timeout=20.0, max_retries=0)
                 logger.info(f"✅ Groq initialized with model: {self.model}")
             except Exception as e:
                 logger.error(f"Failed to initialize Groq: {e}")
@@ -58,7 +59,6 @@ class GroqProvider:
                 'error': 'Groq API key not configured',
                 'provider': 'groq'
             }
-        
         try:
             prompt = self._build_prompt(context)
             
@@ -89,6 +89,14 @@ class GroqProvider:
                 'error': str(e),
                 'provider': 'groq'
             }
+
+    def health_check(self) -> Dict[str, Any]:
+        configured = bool(self.api_key)
+        if not configured:
+            return {'configured': False, 'reachable': False, 'status': 'unconfigured', 'model': self.model}
+        if self.client is None:
+            return {'configured': True, 'reachable': False, 'status': 'unhealthy', 'model': self.model}
+        return {'configured': True, 'reachable': None, 'status': 'configured', 'model': self.model}
     
     def _build_prompt(self, context: str) -> str:
         """Build prompt for Groq."""

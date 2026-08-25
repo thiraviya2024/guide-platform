@@ -6,6 +6,7 @@ CBC Clinical Engine
 from typing import Dict, List, Any, Optional
 from sqlalchemy import text
 from app.core.database import SessionLocal
+from app.services.rule_version_service import lookup_active_rule
 import logging
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ class CBCEngine:
                     LIMIT 1
                 """)
                 
-                row = db.execute(query, {"param": param, "value": value, "gender": gender or "None"}).fetchone()
+                row = lookup_active_rule(db, "cbc", param, value, sex=gender) or db.execute(query, {"param": param, "value": value, "gender": gender or "None"}).fetchone()
                 
                 if not row:
                     query_no_gender = text("""

@@ -9,6 +9,14 @@ from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator
 import os
 
+# ✅ Load .env before settings
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # python-dotenv not installed - skip
+    pass
+
 
 class Settings(BaseSettings):
     """
@@ -58,6 +66,8 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     PASSWORD_RESET_TOKEN_EXPIRE_HOURS: int = 24
     
+    ADMIN_RULES_TOKEN: Optional[str] = None
+
     # ============================================================
     # CORS - FIXED
     # ============================================================
@@ -74,7 +84,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY: Optional[str] = None
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     
-    # ✅ Gemini Configuration - ADDED
+    # ✅ Gemini Configuration
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "models/gemini-3.6-flash"
     
@@ -88,9 +98,13 @@ class Settings(BaseSettings):
     DEEPSEEK_MODEL: str = "deepseek-chat"
     
     DEFAULT_LLM_PROVIDER: str = "groq"  # groq, gemini, openai, ollama, deepseek
+
+    MISTRAL_API_KEY: Optional[str] = None
+    MISTRAL_MODEL: str = "mistral-small-latest"
     
-    # ✅ Multi-AI Configuration - ADDED
+    # ✅ Multi-AI Configuration
     USE_MULTI_AI: bool = True  # Enable multi-AI orchestration
+    AI_PROVIDER_ORDER: str = "groq,gemini,mistral"
     
     # ============================================================
     # FILE UPLOAD
@@ -160,6 +174,14 @@ class Settings(BaseSettings):
     # ============================================================
     # VALIDATORS
     # ============================================================
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def normalize_debug_value(cls, v: object) -> object:
+        """Accept deployment labels without making settings construction fail."""
+        if isinstance(v, str) and v.strip().lower() in {"release", "production"}:
+            return False
+        return v
+
     @field_validator("SECRET_KEY")
     @classmethod
     def validate_secret_key(cls, v: str) -> str:
@@ -174,6 +196,14 @@ class Settings(BaseSettings):
         """Ensure database URL is properly formatted."""
         if not v.startswith("postgresql://"):
             raise ValueError("DATABASE_URL must use postgresql:// scheme")
+        return v
+
+    @field_validator("ADMIN_RULES_TOKEN")
+    @classmethod
+    def validate_admin_token(cls, v: Optional[str]) -> Optional[str]:
+        """Validate admin token format if provided."""
+        if v is not None and len(v) < 16:
+            raise ValueError("ADMIN_RULES_TOKEN must be at least 16 characters long")
         return v
     
     class Config:

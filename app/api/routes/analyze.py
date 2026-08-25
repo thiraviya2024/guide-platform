@@ -25,6 +25,7 @@ from app.services.electrolytes_service import ElectrolytesService
 from app.engines.extraction_engine.cbc_extractor import CBCExtractor
 from app.engines.extraction_engine.lipid_extractor import LipidExtractor
 from app.services.report_context import save_report_context
+from app.services.clinical_evidence import build_clinical_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -290,13 +291,9 @@ async def analyze_manual(
             values = values_data
         
         result = service.analyze_values(values)
-        result['report_context_id'] = save_report_context({
-            'patient_info': request.patient_info or {},
-            'results': result.get('results', {}),
-            'disease_risks': result.get('disease_risks', []),
-            'overall_status': result.get('overall_status'),
-            'category': module,
-        })
+        evidence = build_clinical_evidence(result, request.patient_info or {})
+        result['evidence'] = evidence
+        result['report_context_id'] = save_report_context(evidence)
         return result
 
     except Exception as e:
@@ -368,14 +365,10 @@ async def analyze_file(
                 'size': os.path.getsize(file_path),
                 'module': module
             }
-            result['report_context_id'] = save_report_context({
-                'patient_info': _parse_patient_info(patient_info),
-                'results': result.get('results', {}),
-                'disease_risks': result.get('disease_risks', []),
-                'overall_status': result.get('overall_status'),
-                'category': module,
-                'file_info': result['file_info'],
-            })
+            evidence = build_clinical_evidence(result, _parse_patient_info(patient_info))
+            evidence['file_info'] = result['file_info']
+            result['evidence'] = evidence
+            result['report_context_id'] = save_report_context(evidence)
             return result
         else:
             return {
