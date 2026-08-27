@@ -3,29 +3,24 @@
 Groq AI Explanation Service
 """
 
-import os
 from typing import Dict, Any, List, Optional
-from groq import Groq
 import logging
 
-from app.core.config import settings
+from app.services.ai_orchestrator import AIOrchestrator
+from app.services.clinical_evidence import build_clinical_evidence
 
 logger = logging.getLogger(__name__)
 
 
+class AIProviderUnavailable(RuntimeError):
+    """Raised when no configured AI provider produces a verified response."""
+
+
 class AIService:
-    """Provides AI-powered explanations using Groq."""
+    """Compatibility facade over the report-grounded AI orchestrator."""
     
     def __init__(self):
-        self.api_key = settings.GROQ_API_KEY
-        self.model = settings.GROQ_MODEL
-        self.provider = settings.DEFAULT_LLM_PROVIDER
-        
-        if not self.api_key:
-            logger.warning("⚠️ GROQ_API_KEY not set. AI features will be disabled.")
-            self.client = None
-        else:
-            self.client = Groq(api_key=self.api_key)
+        self.orchestrator = AIOrchestrator()
     
     def explain_results(self, results: Dict[str, Any], disease_risks: List[Dict[str, Any]]) -> str:
         """
@@ -38,46 +33,11 @@ class AIService:
         Returns:
             AI-generated explanation
         """
-        if not self.client:
-            return "AI explanation unavailable. GROQ_API_KEY not configured. Please consult your healthcare provider."
-        
-        # Prepare context
-        context = self._prepare_context(results, disease_risks)
-        
-        # Create prompt
-        prompt = f"""
-        You are a medical AI assistant. Provide a clear, professional explanation of these lab results.
-        
-        {context}
-        
-        Please provide:
-        1. A brief summary of the findings
-        2. What each abnormal result means
-        3. Possible causes
-        4. Recommendations for next steps
-        5. Lifestyle suggestions
-        
-        Keep it professional but easy to understand. Include a disclaimer that this is not medical advice.
-        """
-        
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a knowledgeable medical AI assistant. Provide accurate, helpful, and professional health explanations."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.5,
-                max_tokens=1000
-            )
-            
-            explanation = response.choices[0].message.content
-            logger.info("✅ AI explanation generated")
-            return explanation
-            
-        except Exception as e:
-            logger.error(f"❌ AI explanation failed: {e}")
-            return f"AI explanation unavailable at this time. Error: {str(e)}"
+        evidence = build_clinical_evidence({"results": results, "disease_risks": disease_risks})
+        generated = self.orchestrator.generate_response(evidence, "Explain these report findings.", require_provider=True)
+        if not generated.get("success"):
+            raise AIProviderUnavailable(generated.get("details", "AI providers unavailable"))
+        return generated["response"]
     
     def _prepare_context(self, results: Dict[str, Any], disease_risks: List[Dict[str, Any]]) -> str:
         """Prepare context for AI prompt."""
@@ -122,45 +82,13 @@ class AIService:
         Returns:
             AI-generated lifestyle recommendations
         """
-        if not self.client:
-            return "Lifestyle recommendations unavailable. GROQ_API_KEY not configured."
-        
-        context = self._prepare_context(results, [])
-        
-        prompt = f"""
-        Based on these lab results, provide personalized lifestyle recommendations:
-        
-        {context}
-        
-        Please provide recommendations for:
-        1. Diet and nutrition (specific foods to eat/avoid)
-        2. Exercise and physical activity (type, frequency, intensity)
-        3. Sleep and stress management
-        4. Habits to avoid
-        5. Habits to adopt
-        6. When to follow up with a healthcare provider
-        
-        Be specific, actionable, and evidence-based.
-        """
-        
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a health and wellness expert. Provide practical, actionable lifestyle recommendations based on lab results."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.6,
-                max_tokens=800
-            )
-            
-            recommendations = response.choices[0].message.content
-            logger.info("✅ Lifestyle recommendations generated")
-            return recommendations
-            
-        except Exception as e:
-            logger.error(f"❌ Lifestyle recommendations failed: {e}")
-            return f"Lifestyle recommendations unavailable at this time. Error: {str(e)}"
+        evidence = build_clinical_evidence({"results": results})
+        generated = self.orchestrator.generate_response(
+            evidence, "What lifestyle and food guidance follows from these report findings?", require_provider=True
+        )
+        if not generated.get("success"):
+            raise AIProviderUnavailable(generated.get("details", "AI providers unavailable"))
+        return generated["response"]
     
     def generate_health_summary(self, patient_info: Dict[str, Any], results: Dict[str, Any]) -> str:
         """
@@ -173,53 +101,8 @@ class AIService:
         Returns:
             AI-generated health summary
         """
-        if not self.client:
-            return "Health summary unavailable. GROQ_API_KEY not configured."
-        
-        patient_text = f"""
-        Patient Information:
-        - Name: {patient_info.get('name', 'N/A')}
-        - Age: {patient_info.get('age', 'N/A')}
-        - Gender: {patient_info.get('gender', 'N/A')}
-        - Date: {patient_info.get('date', 'N/A')}
-        """
-        
-        context = self._prepare_context(results, [])
-        
-        prompt = f"""
-        Provide a comprehensive health summary for this patient:
-        
-        {patient_text}
-        
-        Lab Results:
-        {context}
-        
-        Please provide:
-        1. Overall health assessment
-        2. Key findings and concerns
-        3. Areas of optimal health
-        4. Risk factors identified
-        5. Recommended follow-up actions
-        6. Long-term health outlook with appropriate interventions
-        
-        Be professional, compassionate, and evidence-based.
-        """
-        
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a senior physician providing a comprehensive health summary. Be thorough, professional, and compassionate."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.4,
-                max_tokens=1200
-            )
-            
-            summary = response.choices[0].message.content
-            logger.info("✅ Health summary generated")
-            return summary
-            
-        except Exception as e:
-            logger.error(f"❌ Health summary failed: {e}")
-            return f"Health summary unavailable at this time. Error: {str(e)}"
+        evidence = build_clinical_evidence({"results": results}, patient_info)
+        generated = self.orchestrator.generate_response(evidence, "Summarize these report findings.", require_provider=True)
+        if not generated.get("success"):
+            raise AIProviderUnavailable(generated.get("details", "AI providers unavailable"))
+        return generated["response"]

@@ -4,16 +4,19 @@ Report API Routes
 """
 
 from fastapi import APIRouter, HTTPException, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import json
 import os
+import logging
 
 from app.services.pdf_service import PDFService
-from app.services.ai_service import AIService
+from app.services.ai_service import AIService, AIProviderUnavailable
 from app.core.config import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 pdf_service = PDFService()
 ai_service = AIService()
 
@@ -44,16 +47,16 @@ async def generate_report(request: ReportRequest):
                     request.results,
                     request.disease_risks
                 )
-            except Exception as e:
-                ai_explanation = "AI explanation unavailable. Please consult your healthcare provider."
+            except AIProviderUnavailable:
+                logger.warning("Report generated without an AI explanation because providers are unavailable")
         
         if request.include_lifestyle:
             try:
                 lifestyle = ai_service.generate_lifestyle_recommendations(
                     request.results
                 )
-            except Exception as e:
-                lifestyle = "Lifestyle recommendations unavailable."
+            except AIProviderUnavailable:
+                logger.warning("Report generated without AI lifestyle guidance because providers are unavailable")
         
         # Generate PDF
         pdf_path = pdf_service.generate_report(
@@ -111,8 +114,19 @@ async def ai_explain_results(
             "success": True,
             "explanation": explanation
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except AIProviderUnavailable as exc:
+        return JSONResponse(status_code=503, content={
+            "success": False,
+            "error": "AI providers unavailable",
+            "details": str(exc),
+        })
+    except Exception:
+        logger.exception("Report AI explanation failed")
+        return JSONResponse(status_code=502, content={
+            "success": False,
+            "error": "AI explanation failed",
+            "details": "The AI explanation service could not complete the request.",
+        })
 
 
 @router.post("/report/lifestyle")

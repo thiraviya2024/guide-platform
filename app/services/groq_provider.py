@@ -13,6 +13,18 @@ from app.services.llm_provider import BaseLLMProvider
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_error(exc: Exception) -> str:
+    """Classify provider failures without logging credentials or request bodies."""
+    name, message = type(exc).__name__.lower(), str(exc).lower()
+    if "timeout" in name or "timeout" in message:
+        return "connection timeout"
+    if "auth" in name or "api key" in message or "401" in message or "403" in message:
+        return "authentication or authorization failed"
+    if "connect" in name or "connection" in message or "network" in message:
+        return "connection error"
+    return "provider request failed"
+
 _SYSTEM_INSTRUCTION = (
     "You are a patient-facing medical assistant. Answer the patient's actual "
     "question directly using only the verified clinical evidence supplied below. "
@@ -39,6 +51,8 @@ class GroqProvider(BaseLLMProvider):
     def __init__(self):
         self.api_key = settings.GROQ_API_KEY
         self.model = settings.GROQ_MODEL or "llama-3.3-70b-versatile"
+        self.reachable: bool | None = None
+        self.last_error: str | None = None
         
         if not self.api_key:
             logger.warning("GROQ_API_KEY not set. Groq features disabled.")
@@ -46,9 +60,11 @@ class GroqProvider(BaseLLMProvider):
         else:
             try:
                 self.client = Groq(api_key=self.api_key, timeout=20.0, max_retries=0)
-                logger.info(f"✅ Groq initialized with model: {self.model}")
-            except Exception as e:
-                logger.error(f"Failed to initialize Groq: {e}")
+                logger.info("AI provider=groq status=initialized model=%s", self.model)
+            except Exception as exc:
+                self.last_error = _safe_error(exc)
+                self.reachable = False
+                logger.warning("AI provider=groq status=unavailable reason=%s", self.last_error)
                 self.client = None
     
     def analyze(self, context: str) -> Dict[str, Any]:
@@ -73,6 +89,8 @@ class GroqProvider(BaseLLMProvider):
             )
             
             text = sanitize_model_output(response.choices[0].message.content or "")
+            self.reachable = True
+            self.last_error = None
 
             return {
                 'success': True,
@@ -82,21 +100,26 @@ class GroqProvider(BaseLLMProvider):
                 'raw': response
             }
             
-        except Exception as e:
-            logger.error(f"Groq analysis failed: {e}")
+        except Exception as exc:
+            reason = _safe_error(exc)
+            self.reachable = False
+            self.last_error = reason
+            logger.warning("AI provider=groq status=failed reason=%s", reason)
             return {
                 'success': False,
-                'error': str(e),
+                'error': reason,
                 'provider': 'groq'
             }
 
     def health_check(self) -> Dict[str, Any]:
         configured = bool(self.api_key)
         if not configured:
-            return {'configured': False, 'reachable': False, 'status': 'unconfigured', 'model': self.model}
+            return {'configured': False, 'initialized': False, 'reachable': False, 'status': 'unconfigured', 'model': self.model}
         if self.client is None:
-            return {'configured': True, 'reachable': False, 'status': 'unhealthy', 'model': self.model}
-        return {'configured': True, 'reachable': None, 'status': 'configured', 'model': self.model}
+            return {'configured': True, 'initialized': False, 'reachable': False, 'status': 'unavailable', 'model': self.model, 'reason': self.last_error or 'client initialization failed'}
+        if self.reachable is False:
+            return {'configured': True, 'initialized': True, 'reachable': False, 'status': 'unavailable', 'model': self.model, 'reason': self.last_error}
+        return {'configured': True, 'initialized': True, 'reachable': self.reachable, 'status': 'initialized', 'model': self.model}
     
     def _build_prompt(self, context: str) -> str:
         """Build prompt for Groq."""

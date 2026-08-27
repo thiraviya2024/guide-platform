@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from app.services.ai_orchestrator import AIOrchestrator
 from app.services.clinical_evidence import build_clinical_evidence, is_abnormal
@@ -45,14 +46,19 @@ def _abnormal_labels(evidence: Dict[str, Any]) -> list[str]:
 @router.get("/ai/status")
 async def get_ai_status():
     providers = ai_orchestrator.provider_status()
-    active = sum(1 for item in providers.values() if item.get("status") == "online")
+    initialized = sum(1 for item in providers.values() if item.get("initialized"))
+    reachable = sum(1 for item in providers.values() if item.get("reachable") is True)
     return {
         "success": True,
         "timestamp": datetime.now().isoformat(),
         "orchestrator": "active",
         "providers": providers,
         "total_providers": len(providers),
-        "active_providers": active,
+        # Backward-compatible field: active means a provider SDK was actually
+        # initialized, not merely that an environment variable exists.
+        "active_providers": initialized,
+        "initialized_providers": initialized,
+        "reachable_providers": reachable,
     }
 
 
@@ -66,12 +72,22 @@ async def analyze_with_ai(data: Dict[str, Any]):
     source = persisted or data.get("evidence") or data
     evidence = _normalise_evidence(source)
     message = str(data.get("message") or data.get("prompt") or "")
-    generated = ai_orchestrator.generate_response(evidence, message)
+    generated = ai_orchestrator.generate_response(evidence, message, require_provider=True)
+    if not generated.get("success"):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "error": generated.get("error", "AI providers unavailable"),
+                "details": generated.get("details", "No provider returned a usable response"),
+            },
+        )
     report_id = context_id or evidence.get("report_id")
     abnormal_results = _abnormal_labels(evidence)
     return {
         "success": True,
         "response": generated["response"],
+        "explanation": generated["response"],
         "report_id": report_id,
         "provider": generated["provider"],
         "parameters": evidence.get("parameters", {}),

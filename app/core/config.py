@@ -8,11 +8,14 @@ from typing import List, Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator
 import os
+from pathlib import Path
 
 # ✅ Load .env before settings
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    # Resolve relative to this source file so uvicorn, tests, and Render do not
+    # depend on the process working directory to find the project .env file.
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 except ImportError:
     # python-dotenv not installed - skip
     pass
@@ -86,7 +89,7 @@ class Settings(BaseSettings):
     
     # ✅ Gemini Configuration
     GEMINI_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "models/gemini-3.6-flash"
+    GEMINI_MODEL: str = "gemini-2.5-flash"
     
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4o"
@@ -104,7 +107,9 @@ class Settings(BaseSettings):
     
     # ✅ Multi-AI Configuration
     USE_MULTI_AI: bool = True  # Enable multi-AI orchestration
-    AI_PROVIDER_ORDER: str = "groq,gemini,mistral"
+    # Mistral is available as an explicit opt-in provider, but an invalid or
+    # unused Mistral credential must not make it part of the normal failover.
+    AI_PROVIDER_ORDER: str = "groq,gemini"
     
     # ============================================================
     # FILE UPLOAD
