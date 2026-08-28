@@ -31,6 +31,7 @@ class AppointmentStatus(str, enum.Enum):
 
 class ConsultationStatus(str, enum.Enum):
     requested = "REQUESTED"
+    approved = "APPROVED"
     active = "ACTIVE"
     closed = "CLOSED"
     rejected = "REJECTED"
@@ -119,7 +120,11 @@ class Appointment(Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     appointment_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     appointment_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    status: Mapped[AppointmentStatus] = mapped_column(Enum(AppointmentStatus, name="appointment_status"), default=AppointmentStatus.pending, nullable=False)
+    status: Mapped[AppointmentStatus] = mapped_column(
+        Enum(AppointmentStatus, name="appointment_status", values_callable=lambda cls: [item.value for item in cls]),
+        default=AppointmentStatus.pending,
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -130,7 +135,14 @@ class Consultation(Base):
     patient_id: Mapped[str] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), index=True, nullable=False)
     doctor_id: Mapped[str] = mapped_column(ForeignKey("doctors.id", ondelete="CASCADE"), index=True, nullable=False)
     appointment_id: Mapped[str | None] = mapped_column(ForeignKey("appointments.id", ondelete="SET NULL"), nullable=True)
-    status: Mapped[ConsultationStatus] = mapped_column(Enum(ConsultationStatus, name="consultation_status"), default=ConsultationStatus.requested, nullable=False)
+    # PostgreSQL stores the enum *values* (REQUESTED, APPROVED, ...) rather
+    # than Python member names (requested, approved, ...).  This must match
+    # the Alembic enum exactly.
+    status: Mapped[ConsultationStatus] = mapped_column(
+        Enum(ConsultationStatus, name="consultation_status", values_callable=lambda cls: [item.value for item in cls]),
+        default=ConsultationStatus.requested,
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

@@ -68,12 +68,15 @@ async def upload_report(
             raise
         return {
             "success": True,
+            # The client passes this id to /analyze/file.  That endpoint reads
+            # this stored file and updates this same row, so no second report
+            # record or client-side history is involved.
             "message": "File uploaded successfully",
             "filename": safe_filename,
             "file_path": file_path,
             "file_size": os.path.getsize(file_path),
             "report_id": report.id,
-            "analysis_status": report.analysis_status
+            "analysis_status": report.analysis_status,
         }
         
     except HTTPException:

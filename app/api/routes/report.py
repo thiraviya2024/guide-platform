@@ -136,6 +136,11 @@ async def ai_explain_results(
             raise HTTPException(status_code=404, detail="Report analysis not found")
         evidence = finding.evidence
         explanation = ai_service.explain_results(evidence.get("results", {}), evidence.get("disease_risks", []))
+        # This endpoint is allowed to regenerate an explanation, but it must
+        # update the same authenticated report rather than return ephemeral AI
+        # text that disappears from report history.
+        report.ai_explanation = explanation
+        db.commit()
         return {
             "success": True,
             "report_id": report.id,

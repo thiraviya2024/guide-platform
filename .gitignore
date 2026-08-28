@@ -55,6 +55,12 @@ desktop.ini
 test_*.py
 *_test.py
 debug_*.py
+# Keep the repository's backend integration suite under version control.
+!tests/
+tests/*
+!tests/test_persistent_care_flow.py
+!tests/conftest.py
+.pytest_tmp/
 
 # Excel/CSV files (if you don't want to commit)
 *.xlsx

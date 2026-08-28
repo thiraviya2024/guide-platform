@@ -134,6 +134,12 @@ class Settings(BaseSettings):
         "image/gif",
         "image/tiff",
     ]
+
+    # Optional real-world hospital search adapter.  No provider means hospital
+    # search is deliberately unavailable; the API never substitutes fixtures.
+    HOSPITAL_PROVIDER_URL: Optional[str] = None
+    HOSPITAL_PROVIDER_API_KEY: Optional[str] = None
+    HOSPITAL_PROVIDER_TIMEOUT_SECONDS: float = 8.0
     
     # ============================================================
     # OCR

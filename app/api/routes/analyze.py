@@ -31,8 +31,10 @@ from sqlalchemy.orm import Session
 from app.api.dependencies.auth import current_patient
 from app.core.database import get_db
 from app.database.models.domain import Patient, Report, ReportFinding
+from app.services.ai_orchestrator import AIOrchestrator
 
 logger = logging.getLogger(__name__)
+ai_orchestrator = AIOrchestrator()
 
 # ✅ THIS IS THE FIX - router must be defined
 router = APIRouter()
@@ -307,8 +309,8 @@ async def analyze_manual(
 
 @router.post("/analyze/file")
 async def analyze_file(
-    file: UploadFile = File(...),
-    module: str = Query("cbc", description="Module to analyze: lipid, cbc, lft, kft, thyroid, diabetes, vitamins, electrolytes"),
+    file: UploadFile | None = File(None),
+    module: str = Query("auto", description="Module to analyze, or auto to infer it from parsed values"),
     report_id: Optional[str] = Query(None, description="Report ID returned by /upload/report, if the file was uploaded first"),
     patient: Patient = Depends(current_patient),
     db: Session = Depends(get_db),
@@ -318,6 +320,22 @@ async def analyze_file(
     
     Supports: PDF, DOCX, TXT, CSV, XLSX, PNG, JPG
     """
+    analysis_started = False
+
+    def mark_persisted_report_failed() -> None:
+        """Retain the uploaded record while recording a safe terminal state."""
+        if not report_id:
+            return
+        db.rollback()
+        failed = db.query(Report).filter_by(id=report_id, patient_id=patient.id).one_or_none()
+        if failed:
+            failed.analysis_status = "FAILED"
+            failed.analysis_result = {
+                "error": "Analysis could not be completed for this document.",
+                "safe_error_state": True,
+            }
+            db.commit()
+
     try:
         # A supplied report must belong to the authenticated patient.  It is
         # consumed exactly once so upload-then-analyze cannot create a second
@@ -329,6 +347,12 @@ async def analyze_file(
                 raise HTTPException(status_code=404, detail="Report not found")
             if persisted_report.analysis_status != "UPLOADED" or db.query(ReportFinding).filter_by(report_id=report_id).first():
                 raise HTTPException(status_code=409, detail="Report has already been analyzed")
+            # Commit the in-progress state before extraction/provider calls so
+            # a restart cannot leave an analysis attempt looking unstarted.
+            persisted_report.analysis_status = "ANALYZING"
+            db.commit()
+            db.refresh(persisted_report)
+            analysis_started = True
 
         # Create upload directory for direct analyze requests. Upload-then-
         # analyze retains the original stored document rather than making a
@@ -343,6 +367,8 @@ async def analyze_file(
             if not os.path.exists(file_path):
                 raise HTTPException(status_code=404, detail="Uploaded report file is unavailable")
         else:
+            if file is None:
+                raise HTTPException(status_code=422, detail="file is required when report_id is not provided")
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             safe_filename = f"{timestamp}_{file.filename}"
             file_path = os.path.join(upload_dir, safe_filename)
@@ -350,14 +376,13 @@ async def analyze_file(
                 shutil.copyfileobj(file.file, buffer)
         
         # Get file extension
-        file_extension = os.path.splitext(file.filename)[1].lower()
+        source_filename = persisted_report.original_filename if persisted_report else file.filename
+        file_extension = os.path.splitext(source_filename)[1].lower()
         
         # Extract text from file
         text_content = extract_text_from_file(file_path, file_extension)
         
         # Parse values from text
-        values = parse_lab_values(text_content, module)
-        
         # Determine which module to use
         service_map = {
             "lipid": LipidService,
@@ -370,8 +395,13 @@ async def analyze_file(
             "electrolytes": ElectrolytesService,
         }
         
-        if module not in service_map:
-            raise HTTPException(status_code=400, detail=f"Unknown module: {module}")
+        if module in {"auto", "unknown", ""}:
+            candidates = [(name, parse_lab_values(text_content, name)) for name in service_map]
+            module, values = max(candidates, key=lambda item: len(item[1]))
+        else:
+            if module not in service_map:
+                raise HTTPException(status_code=400, detail=f"Unknown module: {module}")
+            values = parse_lab_values(text_content, module)
         
         if values:
             service = service_map[module]()
@@ -386,7 +416,6 @@ async def analyze_file(
             evidence['file_info'] = result['file_info']
             if persisted_report:
                 persisted_report.module = module
-                persisted_report.analysis_status = "ANALYZED"
                 persisted_report.analysis_result = result
                 report = persisted_report
             else:
@@ -399,18 +428,34 @@ async def analyze_file(
                         raise HTTPException(status_code=409, detail="Report has already been analyzed")
                     if os.path.exists(file_path): os.remove(file_path)
                     report.module = module
-                    report.analysis_status = "ANALYZED"
+                    report.analysis_status = "ANALYZING"
                     report.analysis_result = result
                 else:
-                    report = Report(patient_id=patient.id, original_filename=file.filename, stored_filename=safe_filename, storage_path=file_path, module=module, analysis_status="ANALYZED", analysis_result=result, content_sha256=content_sha256)
+                    report = Report(patient_id=patient.id, original_filename=file.filename, stored_filename=safe_filename, storage_path=file_path, module=module, analysis_status="ANALYZING", analysis_result=result, content_sha256=content_sha256)
                     db.add(report)
                 db.flush()
             evidence["report_id"] = report.id
             db.add(ReportFinding(report_id=report.id, evidence=evidence))
+            # Commit the rule-engine output and immutable snapshot before an
+            # external provider sees it.  The provider is then given the
+            # database-backed evidence only, never request text or a mutable
+            # in-memory analysis object.
             db.commit()
-            result['evidence'] = evidence
+            persisted_evidence = db.query(ReportFinding).filter_by(report_id=report.id).one().evidence
+
+            # Preserve a provider-produced explanation when one is available.
+            # Provider unavailability is represented truthfully as null; it
+            # must not erase a valid deterministic clinical analysis.
+            generated = ai_orchestrator.generate_response(
+                persisted_evidence, "Explain this clinical report using the available findings.", require_provider=True
+            )
+            if generated.get("success"):
+                report.ai_explanation = generated["response"]
+            report.analysis_status = "COMPLETED"
+            db.commit()
+            result['evidence'] = persisted_evidence
             try:
-                result['report_context_id'] = save_report_context(evidence)
+                result['report_context_id'] = save_report_context(persisted_evidence)
             except Exception:
                 # The patient-owned immutable report snapshot has committed;
                 # failure of the legacy AI context table must not undo a real
@@ -420,6 +465,14 @@ async def analyze_file(
             result['report_id'] = report.id
             return result
         else:
+            if persisted_report:
+                persisted_report.module = "unknown"
+                persisted_report.analysis_status = "FAILED"
+                persisted_report.analysis_result = {
+                    "error": "No supported laboratory values could be extracted from the uploaded document.",
+                    "safe_error_state": True,
+                }
+                db.commit()
             return {
                 'success': False,
                 'message': f'No {module.upper()} values found in the file. Please use Manual Entry.',
@@ -432,7 +485,10 @@ async def analyze_file(
             }
         
     except HTTPException:
+        if analysis_started:
+            mark_persisted_report_failed()
         raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        mark_persisted_report_failed()
+        logger.exception("Persisted report analysis failed")
+        raise HTTPException(status_code=500, detail="Analysis could not be completed for this document")

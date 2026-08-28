@@ -9,6 +9,7 @@ from app.api.dependencies.auth import current_doctor, current_patient, current_u
 from app.core.config import settings
 from app.core.database import get_db
 from app.database.models.domain import Appointment, AppointmentStatus, Consultation, ConsultationMessage, ConsultationStatus, Doctor, HealthReading, Patient, Report, ReportFinding, User
+from app.services.hospital_provider import ConfiguredHospitalProvider, HospitalProviderError, HospitalProviderUnavailable
 
 router = APIRouter(tags=["Care"])
 
@@ -21,11 +22,21 @@ def serial_health(x: HealthReading): return {k: getattr(x,k) for k in ("id","sys
 def serial_appt(x: Appointment): return {"id":x.id,"patient_id":x.patient_id,"doctor_id":x.doctor_id,"reason":x.reason,"appointment_at":x.appointment_at,"type":x.appointment_type,"status":x.status.value,"created_at":x.created_at,"updated_at":x.updated_at}
 def authorized_doctor_patient(db: Session, doctor: Doctor, patient_id: str):
     appointment = db.query(Appointment).filter(Appointment.doctor_id==doctor.id, Appointment.patient_id==patient_id, Appointment.status.in_([AppointmentStatus.approved, AppointmentStatus.completed])).first()
-    consultation = db.query(Consultation).filter(Consultation.doctor_id==doctor.id, Consultation.patient_id==patient_id, Consultation.status.in_([ConsultationStatus.active, ConsultationStatus.closed])).first()
+    consultation = db.query(Consultation).filter(Consultation.doctor_id==doctor.id, Consultation.patient_id==patient_id, Consultation.status.in_([ConsultationStatus.approved, ConsultationStatus.active, ConsultationStatus.closed])).first()
     if not appointment and not consultation: raise HTTPException(403,"No authorized care relationship")
 
 class HealthInput(BaseModel):
-    systolic_bp: float|None=None; diastolic_bp: float|None=None; spo2: float|None=None; blood_glucose: float|None=None; heart_rate: float|None=None; temperature_c: float|None=None; height_cm: float|None=None; weight_kg: float|None=None; recorded_at: datetime|None=None
+    # These are manual-entry limits, not device-derived readings. Missing data
+    # remains null rather than being invented by the API.
+    systolic_bp: float|None = Field(None, ge=50, le=300)
+    diastolic_bp: float|None = Field(None, ge=30, le=200)
+    spo2: float|None = Field(None, ge=50, le=100)
+    blood_glucose: float|None = Field(None, ge=20, le=1000)
+    heart_rate: float|None = Field(None, ge=20, le=300)
+    temperature_c: float|None = Field(None, ge=30, le=45)
+    height_cm: float|None = Field(None, ge=50, le=300)
+    weight_kg: float|None = Field(None, ge=2, le=500)
+    recorded_at: datetime|None = None
 class BMIInput(BaseModel): height_cm: float; weight_kg: float
 class AppointmentInput(BaseModel): doctor_id: str; reason: str=Field(min_length=1,max_length=4000); appointment_at: datetime; appointment_type: Literal['online','in-person']
 class AppointmentUpdate(BaseModel): status: AppointmentStatus
@@ -155,11 +166,21 @@ def update_consultation(consultation_id:str,data:ConsultationUpdate,user:User=De
     c=db.get(Consultation,consultation_id)
     if not c:raise HTTPException(404,'Consultation not found')
     consultation_access(db,c,user);doctor=db.get(Doctor,c.doctor_id)
-    if data.status==ConsultationStatus.active and user.id!=doctor.user_id:raise HTTPException(403,'Only doctor can start consultation')
-    if data.status not in [ConsultationStatus.active,ConsultationStatus.closed,ConsultationStatus.rejected]:raise HTTPException(409,'Invalid consultation transition')
+    if user.id != doctor.user_id: raise HTTPException(403,'Only doctor can change consultation status')
+    allowed={
+        ConsultationStatus.requested:{ConsultationStatus.approved,ConsultationStatus.rejected},
+        ConsultationStatus.approved:{ConsultationStatus.active,ConsultationStatus.rejected},
+        ConsultationStatus.active:{ConsultationStatus.closed},
+    }
+    if data.status not in allowed.get(c.status,set()):raise HTTPException(409,'Invalid doctor consultation transition')
     c.status=data.status;c.closed_at=datetime.now(timezone.utc) if data.status in [ConsultationStatus.closed,ConsultationStatus.rejected] else None;db.commit();return {"id":c.id,"status":c.status.value}
 
 @router.get('/hospitals/search')
 def hospitals(latitude:float=Query(ge=-90,le=90),longitude:float=Query(ge=-180,le=180),specialty:str|None=None):
-    if not getattr(settings,'HOSPITAL_PROVIDER_URL',None): raise HTTPException(503,'Hospital search provider is not configured')
-    raise HTTPException(501,'Configured hospital provider adapter has not been implemented')
+    try:
+        items = ConfiguredHospitalProvider().search(latitude, longitude, specialty)
+    except HospitalProviderUnavailable as exc:
+        raise HTTPException(503, {"code":"hospital_provider_unavailable", "message":str(exc)})
+    except HospitalProviderError as exc:
+        raise HTTPException(502, {"code":"hospital_provider_error", "message":str(exc)})
+    return {"items": items, "latitude": latitude, "longitude": longitude, "specialty": specialty}

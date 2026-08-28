@@ -15,7 +15,7 @@ depends_on = None
 def upgrade():
     role = sa.Enum("patient", "doctor", "admin", name="user_role")
     appointment_status = sa.Enum("PENDING", "APPROVED", "REJECTED", "CANCELLED", "COMPLETED", name="appointment_status")
-    consultation_status = sa.Enum("REQUESTED", "ACTIVE", "CLOSED", "REJECTED", name="consultation_status")
+    consultation_status = sa.Enum("REQUESTED", "APPROVED", "ACTIVE", "CLOSED", "REJECTED", name="consultation_status")
     op.create_table("users", sa.Column("id", sa.String(36), primary_key=True), sa.Column("email", sa.String(320), nullable=False, unique=True), sa.Column("password_hash", sa.String(255), nullable=False), sa.Column("role", role, nullable=False), sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()), sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("NOW()")))
     op.create_index("ix_users_email", "users", ["email"])
     op.create_table("patients", sa.Column("id", sa.String(36), primary_key=True), sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True), sa.Column("name", sa.String(255), nullable=False), sa.Column("date_of_birth", sa.Date()), sa.Column("gender", sa.String(50)), sa.Column("height_cm", sa.Float()), sa.Column("weight_kg", sa.Float()), sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("NOW()")))
