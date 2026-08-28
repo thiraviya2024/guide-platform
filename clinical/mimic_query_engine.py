@@ -15,8 +15,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # MIMIC database connection (separate from main database)
-MIMIC_DATABASE_URL = os.getenv("MIMIC_DATABASE_URL", 
-    "postgresql://postgres:Thiya%402020@localhost:5432/mimic_demo")
+MIMIC_DATABASE_URL = os.getenv("MIMIC_DATABASE_URL")
 
 
 class MIMICQueryEngine:
@@ -27,6 +26,8 @@ class MIMICQueryEngine:
     
     def __init__(self):
         """Initialize the MIMIC query engine."""
+        if not MIMIC_DATABASE_URL:
+            raise RuntimeError("MIMIC_DATABASE_URL is not configured")
         self.engine = create_engine(MIMIC_DATABASE_URL, pool_pre_ping=True)
         self._connected = False
     

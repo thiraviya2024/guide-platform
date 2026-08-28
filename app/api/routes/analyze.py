@@ -3,7 +3,7 @@
 Analysis API Routes - Full File Upload Support
 """
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Depends
 from typing import Optional, Dict, Any
 from pydantic import BaseModel
 import os
@@ -13,6 +13,7 @@ import io
 import json
 import re
 import logging
+import hashlib
 
 from app.services.lipid_service import LipidService
 from app.services.cbc_service import CBCService
@@ -26,6 +27,10 @@ from app.engines.extraction_engine.cbc_extractor import CBCExtractor
 from app.engines.extraction_engine.lipid_extractor import LipidExtractor
 from app.services.report_context import save_report_context
 from app.services.clinical_evidence import build_clinical_evidence
+from sqlalchemy.orm import Session
+from app.api.dependencies.auth import current_patient
+from app.core.database import get_db
+from app.database.models.domain import Patient, Report, ReportFinding
 
 logger = logging.getLogger(__name__)
 
@@ -304,7 +309,9 @@ async def analyze_manual(
 async def analyze_file(
     file: UploadFile = File(...),
     module: str = Query("cbc", description="Module to analyze: lipid, cbc, lft, kft, thyroid, diabetes, vitamins, electrolytes"),
-    patient_info: Optional[str] = None
+    report_id: Optional[str] = Query(None, description="Report ID returned by /upload/report, if the file was uploaded first"),
+    patient: Patient = Depends(current_patient),
+    db: Session = Depends(get_db),
 ):
     """
     Upload and analyze a file.
@@ -312,17 +319,35 @@ async def analyze_file(
     Supports: PDF, DOCX, TXT, CSV, XLSX, PNG, JPG
     """
     try:
-        # Create upload directory
+        # A supplied report must belong to the authenticated patient.  It is
+        # consumed exactly once so upload-then-analyze cannot create a second
+        # report record or overwrite immutable evidence.
+        persisted_report = None
+        if report_id:
+            persisted_report = db.query(Report).filter_by(id=report_id, patient_id=patient.id).one_or_none()
+            if not persisted_report:
+                raise HTTPException(status_code=404, detail="Report not found")
+            if persisted_report.analysis_status != "UPLOADED" or db.query(ReportFinding).filter_by(report_id=report_id).first():
+                raise HTTPException(status_code=409, detail="Report has already been analyzed")
+
+        # Create upload directory for direct analyze requests. Upload-then-
+        # analyze retains the original stored document rather than making a
+        # duplicate local copy.
         upload_dir = "uploads"
         os.makedirs(upload_dir, exist_ok=True)
         
         # Save file
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_filename = f"{timestamp}_{file.filename}"
-        file_path = os.path.join(upload_dir, safe_filename)
-        
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        if persisted_report:
+            safe_filename = persisted_report.stored_filename
+            file_path = persisted_report.storage_path
+            if not os.path.exists(file_path):
+                raise HTTPException(status_code=404, detail="Uploaded report file is unavailable")
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            safe_filename = f"{timestamp}_{file.filename}"
+            file_path = os.path.join(upload_dir, safe_filename)
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
         
         # Get file extension
         file_extension = os.path.splitext(file.filename)[1].lower()
@@ -346,15 +371,7 @@ async def analyze_file(
         }
         
         if module not in service_map:
-            return {
-                'success': False,
-                'message': f'Unknown module: {module}',
-                'file_info': {
-                    'filename': safe_filename,
-                    'size': os.path.getsize(file_path),
-                    'module': module
-                }
-            }
+            raise HTTPException(status_code=400, detail=f"Unknown module: {module}")
         
         if values:
             service = service_map[module]()
@@ -365,10 +382,42 @@ async def analyze_file(
                 'size': os.path.getsize(file_path),
                 'module': module
             }
-            evidence = build_clinical_evidence(result, _parse_patient_info(patient_info))
+            evidence = build_clinical_evidence(result, {"patient_id": patient.id, "name": patient.name})
             evidence['file_info'] = result['file_info']
+            if persisted_report:
+                persisted_report.module = module
+                persisted_report.analysis_status = "ANALYZED"
+                persisted_report.analysis_result = result
+                report = persisted_report
+            else:
+                with open(file_path, "rb") as uploaded:
+                    content_sha256 = hashlib.file_digest(uploaded, "sha256").hexdigest()
+                report = db.query(Report).filter_by(patient_id=patient.id, content_sha256=content_sha256).one_or_none()
+                if report:
+                    if report.analysis_status != "UPLOADED" or db.query(ReportFinding).filter_by(report_id=report.id).first():
+                        if os.path.exists(file_path): os.remove(file_path)
+                        raise HTTPException(status_code=409, detail="Report has already been analyzed")
+                    if os.path.exists(file_path): os.remove(file_path)
+                    report.module = module
+                    report.analysis_status = "ANALYZED"
+                    report.analysis_result = result
+                else:
+                    report = Report(patient_id=patient.id, original_filename=file.filename, stored_filename=safe_filename, storage_path=file_path, module=module, analysis_status="ANALYZED", analysis_result=result, content_sha256=content_sha256)
+                    db.add(report)
+                db.flush()
+            evidence["report_id"] = report.id
+            db.add(ReportFinding(report_id=report.id, evidence=evidence))
+            db.commit()
             result['evidence'] = evidence
-            result['report_context_id'] = save_report_context(evidence)
+            try:
+                result['report_context_id'] = save_report_context(evidence)
+            except Exception:
+                # The patient-owned immutable report snapshot has committed;
+                # failure of the legacy AI context table must not undo a real
+                # clinical report or produce a false upload failure.
+                logger.exception("Legacy AI report context persistence failed")
+                result['report_context_id'] = None
+            result['report_id'] = report.id
             return result
         else:
             return {
@@ -382,5 +431,8 @@ async def analyze_file(
                 'extracted_text_preview': text_content[:500] if text_content else None
             }
         
+    except HTTPException:
+        raise
     except Exception as e:
+        db.rollback()
         raise HTTPException(status_code=500, detail=str(e))

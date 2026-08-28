@@ -16,11 +16,13 @@ load_dotenv()
 MIMIC_PATH = r"C:\Users\THIYA\Downloads\mimic-iv-clinical-database-demo-2.2\mimic-iv-clinical-database-demo-2.2"
 
 # MIMIC database connection (separate database)
-MIMIC_DATABASE_URL = "postgresql://postgres:Thiya%402020@localhost:5432/mimic_demo"
+MIMIC_DATABASE_URL = os.getenv("MIMIC_DATABASE_URL")
 
 def create_mimic_database():
     """Create MIMIC database if it doesn't exist."""
-    default_url = "postgresql://postgres:Thiya%402020@localhost:5432/postgres"
+    default_url = os.getenv("MIMIC_ADMIN_DATABASE_URL")
+    if not default_url:
+        raise RuntimeError("MIMIC_ADMIN_DATABASE_URL must be configured to create a database")
     engine = create_engine(default_url)
     
     try:
@@ -39,6 +41,8 @@ def create_mimic_database():
 
 def load_mimic_files():
     """Load all MIMIC-IV CSV files into PostgreSQL."""
+    if not MIMIC_DATABASE_URL:
+        raise RuntimeError("MIMIC_DATABASE_URL must be configured")
     engine = create_engine(MIMIC_DATABASE_URL)
     
     # Load hosp files

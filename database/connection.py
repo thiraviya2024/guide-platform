@@ -27,7 +27,7 @@ if not MIMIC_DATABASE_URL:
 
 if not DATABASE_URL:
     # Fallback for local development
-    DATABASE_URL = "postgresql://postgres:password@localhost:5432/lipidai"
+    DATABASE_URL = "postgresql://localhost:5432/lipidai"
     print("⚠️ DATABASE_URL not set, using default local connection")
 
 # Create main engine

@@ -3,7 +3,7 @@
 Report API Routes
 """
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Response, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
@@ -14,6 +14,10 @@ import logging
 from app.services.pdf_service import PDFService
 from app.services.ai_service import AIService, AIProviderUnavailable
 from app.core.config import settings
+from sqlalchemy.orm import Session
+from app.core.database import get_db
+from app.api.dependencies.auth import current_patient
+from app.database.models.domain import Patient, Report, ReportFinding
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -82,13 +86,17 @@ async def generate_report(request: ReportRequest):
 
 
 @router.get("/report/download/{filename}")
-async def download_report(filename: str):
+async def download_report(filename: str, patient: Patient = Depends(current_patient), db: Session = Depends(get_db)):
     """
     Download a generated PDF report.
     """
     from fastapi.responses import FileResponse
     
-    file_path = f"reports/{filename}"
+    # Legacy PDF download is retained but scoped to the authenticated owner.
+    report = db.query(Report).filter_by(patient_id=patient.id, stored_filename=filename).one_or_none()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    file_path = report.storage_path
     
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Report not found")
@@ -100,20 +108,41 @@ async def download_report(filename: str):
     )
 
 
+@router.get("/reports/{report_id}/download")
+async def download_persisted_report(report_id: str, patient: Patient = Depends(current_patient), db: Session = Depends(get_db)):
+    from fastapi.responses import FileResponse
+    report = db.query(Report).filter_by(id=report_id, patient_id=patient.id).one_or_none()
+    if not report or not os.path.exists(report.storage_path):
+        raise HTTPException(status_code=404, detail="Report not found")
+    return FileResponse(report.storage_path, filename=report.original_filename)
+
+
 @router.post("/report/ai-explain")
 async def ai_explain_results(
-    results: Dict[str, Any], 
-    disease_risks: List[Dict[str, Any]] = []
+    report_id: str,
+    patient: Patient = Depends(current_patient),
+    db: Session = Depends(get_db),
 ):
     """
-    Get AI explanation for test results.
+    Explain only the authenticated patient's immutable rule-engine evidence.
+    Client-supplied result fields are deliberately not accepted here.
     """
     try:
-        explanation = ai_service.explain_results(results, disease_risks)
+        report = db.query(Report).filter_by(id=report_id, patient_id=patient.id).one_or_none()
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        finding = db.query(ReportFinding).filter_by(report_id=report.id).one_or_none()
+        if not finding:
+            raise HTTPException(status_code=404, detail="Report analysis not found")
+        evidence = finding.evidence
+        explanation = ai_service.explain_results(evidence.get("results", {}), evidence.get("disease_risks", []))
         return {
             "success": True,
+            "report_id": report.id,
             "explanation": explanation
         }
+    except HTTPException:
+        raise
     except AIProviderUnavailable as exc:
         return JSONResponse(status_code=503, content={
             "success": False,

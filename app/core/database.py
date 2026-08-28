@@ -44,10 +44,10 @@ def get_db() -> Generator[Session, None, None]:
 
 def init_db() -> None:
     """
-    Initialize database - create all tables.
+    Deprecated: schema initialization is performed only by Alembic migrations.
     """
     try:
-        Base.metadata.create_all(bind=engine)
+        raise RuntimeError("Use `python -m alembic upgrade head` to initialize or migrate the database")
         logger.info("✅ Database tables created successfully")
     except Exception as e:
         logger.error(f"❌ Error creating database tables: {e}")

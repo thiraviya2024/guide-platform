@@ -23,6 +23,7 @@ from . import health
 from . import mimic
 from . import patient
 from . import clinical
+from . import care
 
 # Conditional import for AI to avoid circular import
 try:
@@ -51,5 +52,6 @@ __all__ = [
     'mimic',
     'patient',
     'clinical',
+    'care',
     'ai'
 ]

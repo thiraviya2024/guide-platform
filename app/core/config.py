@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # DATABASE
     # ============================================================
     DATABASE_URL: str = Field(
-        default="postgresql://postgres:password@localhost:5432/lifesaver",
+        default="postgresql://localhost:5432/lifesaver",
         description="PostgreSQL connection string"
     )
     DATABASE_POOL_SIZE: int = 20

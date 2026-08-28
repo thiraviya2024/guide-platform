@@ -9,7 +9,7 @@ from app.services.rule_version_service import ensure_schema
 from app.api.routes import (
     upload, analyze, report, admin,
     cbc, lft, kft, thyroid, diabetes, vitamins, electrolytes, lipid,
-    analytics, auth, disease, doctor, guideline, health, mimic, patient, clinical
+    analytics, auth, disease, doctor, guideline, health, mimic, patient, clinical, care
 )
 
 # Import AI router directly
@@ -77,6 +77,7 @@ app.include_router(health.router, prefix=API_V1_PREFIX, tags=["Health"])
 app.include_router(mimic.router, prefix=API_V1_PREFIX, tags=["MIMIC"])
 app.include_router(patient.router, prefix=API_V1_PREFIX, tags=["Patient"])
 app.include_router(clinical.router, prefix=API_V1_PREFIX)
+app.include_router(care.router, prefix=API_V1_PREFIX)
 
 # AI Orchestrator - Direct import
 if AI_ROUTER_AVAILABLE and ai_router is not None:
