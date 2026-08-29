@@ -14,6 +14,11 @@ from app.core.database import get_db
 from app.database.models.domain import Doctor, Patient, User, UserRole
 from app.services.firebase_auth import FirebaseAuthError, FirebaseAuthService, FirebaseIdentity
 
+
+class FirebaseLocalAccountError(Exception):
+    """A verified Firebase identity could not be persisted locally."""
+
+
 bearer = HTTPBearer(auto_error=False)
 passwords = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
@@ -38,7 +43,7 @@ def _firebase_user(identity: FirebaseIdentity, db: Session) -> User:
                 db.commit()
             except IntegrityError as exc:
                 db.rollback()
-                raise FirebaseAuthError("Firebase account is already linked") from exc
+                raise FirebaseLocalAccountError("Unable to link Firebase account") from exc
         else:
             # Firebase cannot create elevated identities.  The random stored
             # hash makes password login unavailable until explicitly managed.
@@ -57,7 +62,7 @@ def _firebase_user(identity: FirebaseIdentity, db: Session) -> User:
                 db.commit()
             except IntegrityError as exc:
                 db.rollback()
-                raise FirebaseAuthError("Unable to create Firebase user") from exc
+                raise FirebaseLocalAccountError("Unable to create Firebase user") from exc
     if not user.is_active:
         raise FirebaseAuthError("Firebase account is inactive")
     return user

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
-from app.api.dependencies.auth import create_access_token, current_user, resolve_firebase_user
+from app.api.dependencies.auth import FirebaseLocalAccountError, create_access_token, current_user, resolve_firebase_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.database.models.domain import Doctor, Patient, User, UserRole
@@ -80,6 +80,9 @@ async def firebase_login(request: FirebaseLoginRequest, db: Session = Depends(ge
     except FirebaseConfigurationError as exc:
         # This is a server deployment problem, not a bad user credential.
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    except FirebaseLocalAccountError as exc:
+        # The token was verified; this is a local persistence problem.
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to complete Firebase sign-in") from exc
     except FirebaseAuthError as exc:
         # Verification and account-linking failures are user authentication errors.
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
