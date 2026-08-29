@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Callable
+import logging
 import secrets
 
 from fastapi import Depends, HTTPException, status
@@ -13,6 +14,8 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.database.models.domain import Doctor, Patient, User, UserRole
 from app.services.firebase_auth import FirebaseAuthError, FirebaseAuthService, FirebaseIdentity
+
+logger = logging.getLogger(__name__)
 
 
 class FirebaseLocalAccountError(Exception):
@@ -31,11 +34,16 @@ def _firebase_user(identity: FirebaseIdentity, db: Session) -> User:
     # Keep the persistence boundary normalized even when this helper is called
     # by a trusted internal verifier other than FirebaseAuthService.
     email = identity.email.strip().lower()
-    user = db.query(User).filter(User.firebase_uid == identity.uid).one_or_none()
+    try:
+        user = db.query(User).filter(User.firebase_uid == identity.uid).one_or_none()
+    except Exception as exc:
+        logger.error("Firebase sign-in failed; stage=user_lookup uid=%s exception=%s message=%s", identity.uid, type(exc).__name__, "Local user lookup failed")
+        raise
     if user is None:
         user = db.query(User).filter(User.email == email).one_or_none()
         if user is not None:
             if user.firebase_uid and user.firebase_uid != identity.uid:
+                logger.warning("Firebase sign-in failed; stage=user_linking uid=%s exception=%s message=%s", identity.uid, FirebaseAuthError.__name__, "Firebase account is not linked to this user")
                 raise FirebaseAuthError("Firebase account is not linked to this user")
             # Linking retains local ID, role, password hash, and profiles.
             user.firebase_uid = identity.uid
@@ -43,6 +51,7 @@ def _firebase_user(identity: FirebaseIdentity, db: Session) -> User:
                 db.commit()
             except IntegrityError as exc:
                 db.rollback()
+                logger.error("Firebase sign-in failed; stage=user_linking uid=%s exception=%s message=%s", identity.uid, type(exc).__name__, "Unable to link Firebase account")
                 raise FirebaseLocalAccountError("Unable to link Firebase account") from exc
         else:
             # Firebase cannot create elevated identities.  The random stored
@@ -62,8 +71,10 @@ def _firebase_user(identity: FirebaseIdentity, db: Session) -> User:
                 db.commit()
             except IntegrityError as exc:
                 db.rollback()
+                logger.error("Firebase sign-in failed; stage=user_creation uid=%s exception=%s message=%s", identity.uid, type(exc).__name__, "Unable to create Firebase user")
                 raise FirebaseLocalAccountError("Unable to create Firebase user") from exc
     if not user.is_active:
+        logger.warning("Firebase sign-in failed; stage=user_lookup uid=%s exception=%s message=%s", identity.uid, FirebaseAuthError.__name__, "Firebase account is inactive")
         raise FirebaseAuthError("Firebase account is inactive")
     return user
 

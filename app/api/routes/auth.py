@@ -1,4 +1,5 @@
 from datetime import date
+import logging
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,6 +13,7 @@ from app.database.models.domain import Doctor, Patient, User, UserRole
 from app.services.firebase_auth import FirebaseAuthError, FirebaseConfigurationError
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+logger = logging.getLogger(__name__)
 # PBKDF2-SHA256 avoids the incompatible bcrypt backend currently installed
 # with Python 3.13 while retaining salted, adaptive password hashing.
 passwords = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -76,7 +78,7 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
 async def firebase_login(request: FirebaseLoginRequest, db: Session = Depends(get_db)):
     """Exchange a verified Firebase ID token for the existing local JWT."""
     try:
-        return auth_response(resolve_firebase_user(request.id_token, db))
+        user = resolve_firebase_user(request.id_token, db)
     except FirebaseConfigurationError as exc:
         # This is a server deployment problem, not a bad user credential.
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
@@ -86,6 +88,17 @@ async def firebase_login(request: FirebaseLoginRequest, db: Session = Depends(ge
     except FirebaseAuthError as exc:
         # Verification and account-linking failures are user authentication errors.
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    try:
+        return auth_response(user)
+    except Exception as exc:
+        # `user` exists only after Firebase verification and local lookup have
+        # succeeded, so this precisely identifies local JWT construction.
+        logger.error(
+            "Firebase sign-in failed; stage=jwt_creation exception=%s message=%s",
+            type(exc).__name__,
+            "Unable to create local access token",
+        )
+        raise
 
 
 @router.post("/demo-login")

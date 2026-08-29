@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -127,11 +128,20 @@ class FirebaseAuthService:
         return cls._app
 
     @classmethod
-    def _token_metadata(cls, id_token: str) -> tuple[str | None, str | None]:
-        """Return only safe, untrusted JWT routing claims for diagnostics.
+    def _safe_exception_message(cls, exc: Exception) -> str:
+        """Keep provider diagnostics useful without ever emitting JWT material."""
+        message = " ".join(str(exc).split())
+        # JWTs are three URL-safe base64url sections. Redact defensively even
+        # though Firebase Admin exceptions normally do not include the token.
+        message = re.sub(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "<redacted-token>", message)
+        return message[:500] or "<no message>"
 
-        This is intentionally not token verification. Firebase Admin remains
-        the sole authority that authenticates signatures and expiry.
+    @classmethod
+    def _token_metadata(cls, id_token: str) -> tuple[str | None, str | None]:
+        """Read untrusted routing claims solely for an early project rejection.
+
+        Firebase Admin remains responsible for signature, expiry, issuer, and
+        audience verification; these values are never logged.
         """
         try:
             parts = id_token.split(".")
@@ -148,14 +158,12 @@ class FirebaseAuthService:
             return None, None
 
     @classmethod
-    def _log_token_failure(cls, issuer: str | None, audience: str | None, exc: Exception) -> None:
+    def _log_token_failure(cls, exc: Exception) -> None:
         logger.warning(
-            "Firebase ID token verification failed; project=%s issuer=%s audience=%s exception=%s message=%s",
+            "Firebase sign-in failed; stage=token_verification project=%s exception=%s message=%s",
             (settings.FIREBASE_PROJECT_ID or "").strip() or "<missing>",
-            issuer or "<unavailable>",
-            audience or "<unavailable>",
             type(exc).__name__,
-            str(exc),
+            cls._safe_exception_message(exc),
         )
 
     @classmethod
@@ -167,7 +175,7 @@ class FirebaseAuthService:
         expected_issuer = f"https://securetoken.google.com/{project_id}"
         if issuer != expected_issuer or audience != project_id:
             exc = FirebaseTokenError("Firebase token project does not match this backend")
-            cls._log_token_failure(issuer, audience, exc)
+            cls._log_token_failure(exc)
             raise exc
         try:
             app = cls._get_app()
@@ -177,18 +185,31 @@ class FirebaseAuthService:
             raise
         except Exception as exc:
             # Do not surface provider internals or any token material to clients.
-            cls._log_token_failure(issuer, audience, exc)
+            cls._log_token_failure(exc)
             raise FirebaseTokenError("Invalid Firebase ID token") from exc
         # Admin verifies these claims as part of ID-token validation. Keep the
         # explicit check as a defence-in-depth assertion and for clear logs.
         if claims.get("iss") != expected_issuer or claims.get("aud") != project_id:
             exc = FirebaseTokenError("Firebase token project does not match this backend")
-            cls._log_token_failure(issuer, audience, exc)
+            cls._log_token_failure(exc)
             raise exc
         uid = claims.get("uid") or claims.get("sub")
         email = claims.get("email")
         if not isinstance(uid, str) or not uid or not isinstance(email, str) or not email.strip():
-            raise FirebaseTokenError("Firebase account must have an email address")
+            exc = FirebaseTokenError("Firebase account must have an email address")
+            cls._log_token_failure(exc)
+            raise exc
+        firebase_claims = claims.get("firebase")
+        provider = firebase_claims.get("sign_in_provider") if isinstance(firebase_claims, dict) else None
+        logger.info(
+            "Firebase ID token verified; project=%s uid=%s issuer=%s audience=%s auth_time=%s provider=%s",
+            project_id,
+            uid,
+            claims.get("iss"),
+            claims.get("aud"),
+            claims.get("auth_time", "<unavailable>"),
+            provider if isinstance(provider, str) else "<unavailable>",
+        )
         return FirebaseIdentity(
             uid=uid,
             email=email.strip().lower(),
