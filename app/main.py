@@ -124,7 +124,7 @@ async def root():
         "report": ["/api/v1/report/generate"],
         "admin": ["/api/v1/admin/rules", "/api/v1/admin/stats", "/api/v1/admin/seed"],
         "analytics": ["/api/v1/analytics/", "/api/v1/analytics/summary"],
-        "auth": ["/api/v1/auth/login", "/api/v1/auth/register", "/api/v1/auth/logout"],
+        "auth": ["/api/v1/auth/login", "/api/v1/auth/register", "/api/v1/auth/firebase", "/api/v1/auth/demo-login", "/api/v1/auth/logout"],
         "disease": ["/api/v1/disease/", "/api/v1/disease/{disease_id}"],
         "doctor": [
             "/api/v1/doctor/datasets/upload",

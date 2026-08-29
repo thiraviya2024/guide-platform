@@ -41,6 +41,9 @@ class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_id)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True, nullable=False)
+    # Nullable while existing local-password accounts are progressively linked
+    # to Firebase identities.  A Firebase UID may never belong to two users.
+    firebase_uid: Mapped[str | None] = mapped_column(String(128), unique=True, index=True, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role"), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

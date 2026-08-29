@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     PASSWORD_RESET_TOKEN_EXPIRE_HOURS: int = 24
+
+    # Firebase Admin credentials are server-side only.  Supply exactly one
+    # service-account value in the deployment environment; never commit it.
+    FIREBASE_PROJECT_ID: Optional[str] = None
+    FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None
+    FIREBASE_SERVICE_ACCOUNT_BASE64: Optional[str] = None
+    ENABLE_DEMO_AUTH: bool = False
     
     ADMIN_RULES_TOKEN: Optional[str] = None
 
