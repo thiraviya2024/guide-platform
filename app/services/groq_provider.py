@@ -40,7 +40,9 @@ _SYSTEM_INSTRUCTION = (
     "preserve verified values and statuses, and do not invent missing values or "
     "diagnoses. Laboratory results alone do not confirm a diagnosis; describe "
     "possible risks without saying the patient has a disease, and recommend "
-    "professional evaluation when appropriate. "
+    "professional evaluation when appropriate. Use food guidance only when it is "
+    "explicitly marked database-backed food rule, and say it is report-based guidance. "
+    "Never claim the patient ate a food unless recorded intake evidence is supplied. "
     "Keep the final answer concise."
 )
 

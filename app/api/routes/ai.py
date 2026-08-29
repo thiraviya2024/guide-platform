@@ -1,17 +1,40 @@
 """Report-grounded AI routes."""
 
 from datetime import datetime
+import logging
+import re
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
+from app.api.dependencies.auth import current_patient
+from app.core.database import get_db
+from app.database.models.domain import Patient, Report, ReportFinding
 from app.services.ai_orchestrator import AIOrchestrator
 from app.services.clinical_evidence import build_clinical_evidence, is_abnormal
-from app.services.report_context import load_report_context
+from app.services.food_rule_evidence import food_rules_for_evidence
 
 router = APIRouter()
 ai_orchestrator = AIOrchestrator()
+logger = logging.getLogger(__name__)
+
+
+def _is_intake_history_question(message: str) -> bool:
+    text = message.casefold()
+    return "intake" in text or bool(
+        re.search(r"\b(?:did|have)\b.{0,30}\b(?:eat|ate|eating)\b", text)
+    )
+
+
+def _is_food_recommendation_question(message: str) -> bool:
+    text = message.casefold()
+    food_terms = ("food", "foods", "diet", "eat", "eating", "avoid", "limit")
+    request_terms = ("should", "good", "recommend", "recommendation", "avoid", "limit", "what")
+    return not _is_intake_history_question(message) and any(term in text for term in food_terms) and any(
+        term in text for term in request_terms
+    )
 
 
 def _normalise_evidence(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -63,15 +86,62 @@ async def get_ai_status():
 
 
 @router.post("/ai/analyze")
-async def analyze_with_ai(data: Dict[str, Any]):
-    context_id = data.get("report_id") or data.get("report_context_id")
-    persisted = load_report_context(context_id) if context_id else None
-    if context_id and persisted is None:
+async def analyze_with_ai(
+    data: Dict[str, Any],
+    patient: Patient = Depends(current_patient),
+    db: Session = Depends(get_db),
+):
+    """Answer from the authenticated patient's current persisted report only."""
+    message = str(data.get("message") or data.get("prompt") or "")
+    requested_report_id = data.get("report_id") or data.get("report_context_id")
+    if _is_intake_history_question(message):
+        logger.info("AI chat report_context=not_needed reason=intake_history_question")
+        return {
+            "success": True,
+            "response": "I do not have a record of what you ate. I can provide report-based food recommendations when a current report is available.",
+            "report_id": None,
+            "provider": "deterministic",
+        }
+
+    query = db.query(Report, ReportFinding).join(ReportFinding, ReportFinding.report_id == Report.id).filter(
+        Report.patient_id == patient.id
+    )
+    if requested_report_id:
+        report_and_finding = query.filter(Report.id == requested_report_id).one_or_none()
+    else:
+        report_and_finding = query.order_by(Report.uploaded_at.desc()).first()
+    if report_and_finding is None:
+        logger.info("AI chat report_context=not_found requested=%s", bool(requested_report_id))
+        # A requested report ID must resolve within this patient's records;
+        # do not silently substitute a different current report.
+        if requested_report_id:
+            raise HTTPException(status_code=404, detail="Report context not found")
+        if _is_food_recommendation_question(message):
+            return {
+                "success": True,
+                "response": "I do not have a current report to match with database food recommendations.",
+                "report_id": None,
+                "provider": "deterministic",
+            }
         raise HTTPException(status_code=404, detail="Report context not found")
 
-    source = persisted or data.get("evidence") or data
-    evidence = _normalise_evidence(source)
-    message = str(data.get("message") or data.get("prompt") or "")
+    report, finding = report_and_finding
+    evidence = _normalise_evidence(dict(finding.evidence))
+    evidence["report_id"] = report.id
+    evidence["module"] = evidence.get("module") or report.module
+    if _is_food_recommendation_question(message):
+        evidence["food_rules"] = food_rules_for_evidence(db, evidence)
+    else:
+        evidence["food_rules"] = []
+    categories = sorted({item["category"] for item in evidence["food_rules"]})
+    logger.info(
+        "AI chat report_context=found module=%s abnormal_count=%s food_rule_count=%s food_rule_categories=%s evidence_keys=%s",
+        evidence.get("module"),
+        len(evidence.get("abnormal_results", [])),
+        len(evidence["food_rules"]),
+        categories,
+        sorted(key for key in evidence if key not in {"patient_info", "original_values", "parameters", "results"}),
+    )
     generated = ai_orchestrator.generate_response(evidence, message, require_provider=True)
     if not generated.get("success"):
         return JSONResponse(
@@ -82,7 +152,7 @@ async def analyze_with_ai(data: Dict[str, Any]):
                 "details": generated.get("details", "No provider returned a usable response"),
             },
         )
-    report_id = context_id or evidence.get("report_id")
+    report_id = report.id
     abnormal_results = _abnormal_labels(evidence)
     return {
         "success": True,

@@ -60,6 +60,8 @@ debug_*.py
 tests/*
 !tests/test_persistent_care_flow.py
 !tests/test_auth_firebase.py
+!tests/test_ai_evidence_flow.py
+!tests/test_ai_food_rules.py
 !tests/conftest.py
 .pytest_tmp/
 
