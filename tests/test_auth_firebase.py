@@ -1,6 +1,9 @@
 """Authentication coverage for local JWT, Firebase mapping, and demo identities."""
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -12,7 +15,12 @@ from app.core.config import settings
 from app.core.database import Base, get_db
 from app.database.models.domain import Doctor, Patient, User, UserRole
 from app.main import app
-from app.services.firebase_auth import FirebaseAuthError, FirebaseAuthService, FirebaseIdentity
+from app.services.firebase_auth import (
+    FirebaseAuthError,
+    FirebaseAuthService,
+    FirebaseConfigurationError,
+    FirebaseIdentity,
+)
 
 
 @pytest.fixture()
@@ -117,6 +125,58 @@ def test_firebase_missing_email_is_rejected(client_and_session, monkeypatch):
     client, _ = client_and_session
     monkeypatch.setattr(FirebaseAuthService, "verify_id_token", classmethod(lambda cls, token: (_ for _ in ()).throw(FirebaseAuthError("Firebase account must have an email address"))))
     assert client.post("/api/v1/auth/firebase", json={"id_token": "missing-email"}).status_code == 401
+
+
+def test_firebase_configuration_failures_are_server_errors(client_and_session, monkeypatch):
+    client, _ = client_and_session
+    monkeypatch.setattr(
+        FirebaseAuthService,
+        "verify_id_token",
+        classmethod(lambda cls, token: (_ for _ in ()).throw(FirebaseConfigurationError("Firebase Admin configuration is missing"))),
+    )
+    response = client.post("/api/v1/auth/firebase", json={"id_token": "valid-shaped-token"})
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Firebase Admin configuration is missing"
+
+
+def test_render_firebase_credentials_are_normalized_and_project_bound(monkeypatch):
+    monkeypatch.setattr(settings, "FIREBASE_PROJECT_ID", "life-saver-93cc0")
+    monkeypatch.setattr(settings, "FIREBASE_CLIENT_EMAIL", "firebase-adminsdk@example.iam.gserviceaccount.com")
+    monkeypatch.setattr(settings, "FIREBASE_PRIVATE_KEY", "-----BEGIN PRIVATE KEY-----\\nvalue\\n-----END PRIVATE KEY-----\\n")
+    data = FirebaseAuthService._credential_data()
+    assert data["project_id"] == "life-saver-93cc0"
+    assert data["private_key"] == "-----BEGIN PRIVATE KEY-----\nvalue\n-----END PRIVATE KEY-----\n"
+    monkeypatch.setattr(settings, "FIREBASE_PROJECT_ID", "another-project")
+    with pytest.raises(FirebaseConfigurationError):
+        FirebaseAuthService._credential_data()
+
+
+def test_firebase_admin_is_initialized_once_per_process(monkeypatch):
+    calls = []
+    fake_admin = SimpleNamespace()
+
+    def get_app():
+        if not hasattr(fake_admin, "app"):
+            raise ValueError("The default Firebase app does not exist")
+        return fake_admin.app
+
+    def initialize_app(certificate, options):
+        calls.append((certificate, options))
+        fake_admin.app = SimpleNamespace(project_id=options["projectId"])
+        return fake_admin.app
+
+    fake_admin.get_app = get_app
+    fake_admin.initialize_app = initialize_app
+    fake_admin.credentials = SimpleNamespace(Certificate=lambda data: data)
+    monkeypatch.setitem(sys.modules, "firebase_admin", fake_admin)
+    monkeypatch.setattr(settings, "FIREBASE_PROJECT_ID", "life-saver-93cc0")
+    monkeypatch.setattr(settings, "FIREBASE_CLIENT_EMAIL", "firebase-adminsdk@example.iam.gserviceaccount.com")
+    monkeypatch.setattr(settings, "FIREBASE_PRIVATE_KEY", "private-key")
+    monkeypatch.setattr(FirebaseAuthService, "_app", None)
+
+    assert FirebaseAuthService._get_app() is FirebaseAuthService._get_app()
+    assert len(calls) == 1
+    assert calls[0][1] == {"projectId": "life-saver-93cc0"}
 
 
 def test_demo_login_is_development_only_and_roles_are_authoritative(client_and_session, monkeypatch):

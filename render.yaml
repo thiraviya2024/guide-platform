@@ -14,3 +14,9 @@ services:
         value: llama-3.3-70b-versatile
       - key: DEBUG
         value: False
+      - key: FIREBASE_PROJECT_ID
+        value: life-saver-93cc0
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false

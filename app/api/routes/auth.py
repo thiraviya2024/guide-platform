@@ -9,7 +9,7 @@ from app.api.dependencies.auth import create_access_token, current_user, resolve
 from app.core.config import settings
 from app.core.database import get_db
 from app.database.models.domain import Doctor, Patient, User, UserRole
-from app.services.firebase_auth import FirebaseAuthError
+from app.services.firebase_auth import FirebaseAuthError, FirebaseConfigurationError
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 # PBKDF2-SHA256 avoids the incompatible bcrypt backend currently installed
@@ -77,8 +77,11 @@ async def firebase_login(request: FirebaseLoginRequest, db: Session = Depends(ge
     """Exchange a verified Firebase ID token for the existing local JWT."""
     try:
         return auth_response(resolve_firebase_user(request.id_token, db))
+    except FirebaseConfigurationError as exc:
+        # This is a server deployment problem, not a bad user credential.
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
     except FirebaseAuthError as exc:
-        # Configuration and verification details stay server-side.
+        # Verification and account-linking failures are user authentication errors.
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
 

@@ -81,10 +81,9 @@ def current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer), db
         if not user or not user.is_active:
             raise HTTPException(status_code=401, detail="Invalid or inactive authentication token")
         return user
-    try:
-        return resolve_firebase_user(credentials.credentials, db)
-    except FirebaseAuthError:
-        raise HTTPException(status_code=401, detail="Invalid or inactive authentication token")
+    # Firebase ID tokens are exchanged at /auth/firebase for a LIFE SAVER JWT;
+    # they are never accepted as permanent API bearer credentials.
+    raise HTTPException(status_code=401, detail="Invalid or inactive authentication token")
 
 def require_role(*roles: UserRole) -> Callable:
     def dependency(user: User = Depends(current_user)) -> User:

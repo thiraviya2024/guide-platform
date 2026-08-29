@@ -69,9 +69,13 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     PASSWORD_RESET_TOKEN_EXPIRE_HOURS: int = 24
 
-    # Firebase Admin credentials are server-side only.  Supply exactly one
-    # service-account value in the deployment environment; never commit it.
+    # Firebase Admin credentials are server-side only. Render supplies these
+    # three values; the private key may contain literal "\\n" escapes.
     FIREBASE_PROJECT_ID: Optional[str] = None
+    FIREBASE_CLIENT_EMAIL: Optional[str] = None
+    FIREBASE_PRIVATE_KEY: Optional[str] = None
+    # Legacy local-development options are retained for backwards
+    # compatibility, but Render must use the three variables above.
     FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None
     FIREBASE_SERVICE_ACCOUNT_BASE64: Optional[str] = None
     ENABLE_DEMO_AUTH: bool = False
