@@ -6,12 +6,16 @@ import re
 from typing import Any, Dict
 
 
-_ABNORMAL_TERMS = ("high", "low", "critical", "abnormal", "elevated", "decreased")
+# This is the sole definition used to construct canonical abnormal findings.
+# In particular, clinically favourable statuses such as NORMAL and OPTIMAL are
+# not findings merely because they differ from the string "Normal".
+FINAL_ABNORMAL_STATUSES = frozenset({"HIGH", "LOW", "CRITICAL"})
 _GREETING = {"hi", "hello", "hey"}
 
 
 def is_abnormal(status: Any) -> bool:
-    return bool(status) and any(term in str(status).lower() for term in _ABNORMAL_TERMS)
+    """Return whether a final deterministic status is an abnormal finding."""
+    return isinstance(status, str) and status.strip().upper() in FINAL_ABNORMAL_STATUSES
 
 
 def build_clinical_evidence(

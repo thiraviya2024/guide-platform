@@ -6,32 +6,32 @@ from typing import Any, Dict
 LIPID_RULES = {
     "total_cholesterol": {
         "unit": "mg/dL",
-        "classify": lambda value: "Normal" if value < 200 else "Borderline High" if value < 240 else "High",
+        "classify": lambda value: "NORMAL" if value < 200 else "BORDERLINE HIGH" if value < 240 else "HIGH",
         "reference_range": "<200 mg/dL",
     },
     "ldl_cholesterol": {
         "unit": "mg/dL",
-        "classify": lambda value: "Normal" if value < 130 else "Borderline High" if value < 160 else "High",
+        "classify": lambda value: "OPTIMAL" if value < 100 else "NEAR OPTIMAL" if value < 130 else "BORDERLINE HIGH" if value < 160 else "HIGH" if value < 190 else "VERY HIGH",
         "reference_range": "<130 mg/dL",
     },
     "ldl": {
         "unit": "mg/dL",
-        "classify": lambda value: "Normal" if value < 130 else "Borderline High" if value < 160 else "High",
+        "classify": lambda value: "OPTIMAL" if value < 100 else "NEAR OPTIMAL" if value < 130 else "BORDERLINE HIGH" if value < 160 else "HIGH" if value < 190 else "VERY HIGH",
         "reference_range": "<130 mg/dL",
     },
     "hdl_cholesterol": {
         "unit": "mg/dL",
-        "classify": lambda value: "Good" if value >= 60 else "Normal" if value >= 40 else "Low",
+        "classify": lambda value: "NORMAL" if value >= 40 else "LOW",
         "reference_range": ">=40 mg/dL",
     },
     "hdl": {
         "unit": "mg/dL",
-        "classify": lambda value: "Good" if value >= 60 else "Normal" if value >= 40 else "Low",
+        "classify": lambda value: "NORMAL" if value >= 40 else "LOW",
         "reference_range": ">=40 mg/dL",
     },
     "triglycerides": {
         "unit": "mg/dL",
-        "classify": lambda value: "Normal" if value < 150 else "Borderline High" if value < 200 else "High" if value < 500 else "Very High",
+        "classify": lambda value: "NORMAL" if value < 150 else "BORDERLINE HIGH" if value < 200 else "HIGH" if value < 500 else "VERY HIGH",
         "reference_range": "<150 mg/dL",
     },
 }
@@ -68,7 +68,9 @@ def analyze_clinical_values(module: str, values: Dict[str, Any], patient: Dict[s
             "reference_range": reference_range,
         }
         parameters[normalized_name] = parameter
-        if status not in {"Normal", "Good"}:
+        # The endpoint's evidence follows the same canonical definition as
+        # persisted report evidence; OPTIMAL and NORMAL remain non-abnormal.
+        if _is_abnormal_status(status):
             abnormal_results.append({"parameter": normalized_name, **parameter})
             recommendations.append(f"Discuss the {normalized_name.replace('_', ' ')} result with a qualified clinician.")
 
@@ -84,10 +86,10 @@ def analyze_clinical_values(module: str, values: Dict[str, Any], patient: Dict[s
 
 
 def _is_abnormal_status(status: Any) -> bool:
-    if status is None:
-        return False
-    normalized = str(status).strip().lower()
-    return normalized in {"high", "very high", "low", "very low", "critical", "abnormal", "elevated", "decreased", "borderline high", "borderline low", "above range", "below range"} or any(token in normalized for token in ("high", "low", "critical", "abnormal"))
+    # Import here avoids changing this endpoint's public surface while making
+    # canonical evidence the single status policy owner.
+    from app.services.clinical_evidence import is_abnormal
+    return is_abnormal(status)
 
 
 def fallback_explanation(evidence: Dict[str, Any]) -> str:

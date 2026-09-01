@@ -42,8 +42,16 @@ def _normalise_evidence(data: Dict[str, Any]) -> Dict[str, Any]:
     if data.get("parameters") and data.get("abnormal_results") is not None:
         evidence = dict(data)
         evidence.setdefault("results", evidence["parameters"])
-        evidence.setdefault("doctor_review_required", bool(evidence["abnormal_results"]))
-        evidence.setdefault("physician_review_required", evidence["doctor_review_required"])
+        # Never trust a legacy/client supplied list over rule-engine
+        # parameters. This prevents an AI request from changing the report's
+        # deterministic abnormal classifications.
+        evidence["abnormal_results"] = [
+            {"parameter": name, **details}
+            for name, details in evidence["parameters"].items()
+            if isinstance(details, dict) and is_abnormal(details.get("status"))
+        ]
+        evidence["doctor_review_required"] = bool(evidence["abnormal_results"])
+        evidence["physician_review_required"] = evidence["doctor_review_required"]
         evidence.setdefault("recommendations", [
             value.get("recommendation") for value in evidence["parameters"].values()
             if isinstance(value, dict) and is_abnormal(value.get("status")) and value.get("recommendation")
